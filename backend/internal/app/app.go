@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/harundarat/rive/backend/internal/config"
+	"github.com/harundarat/rive/backend/internal/infrastructure/database"
 )
 
 type App struct {
@@ -16,6 +17,13 @@ func Initialize() (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+
+	pgDB, err := database.Open(cfg.Database)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	_ = pgDB
 
 	log.Println("Starting application...")
 
