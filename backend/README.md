@@ -8,6 +8,7 @@
 3. sqlc
 4. pressly/goose
 5. go-chi
+6. uuid v7, v5
 
 ### Infrastructure:
 1. CockroachDB (CockroachDB Cloud Free Tier)
