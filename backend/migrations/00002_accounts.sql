@@ -5,12 +5,12 @@
         agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
         name VARCHAR(255) NOT NULL,
         type VARCHAR(255) NOT NULL CHECK (type IN ('asset', 'liability', 'revenue', 'expense', 'equity')),
-        balance DECIMAL(78, 0) NOT NULL,
+        balance DECIMAL(78, 0) NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         version INT NOT NULL DEFAULT 1
     );
 
-    CREATE INDEX idx_agent_name ON accounts (agent_id, name);
+    CREATE UNIQUE INDEX idx_agent_name ON accounts (agent_id, name);
 -- +goose StatementEnd
 
 -- +goose Down

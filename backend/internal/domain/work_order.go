@@ -13,7 +13,6 @@ const (
 	WorkOrderStatusDraft     WorkOrderStatus = "draft"
 	WorkOrderStatusLocked    WorkOrderStatus = "locked"
 	WorkOrderStatusCompleted WorkOrderStatus = "completed"
-	WorkOrderStatusDisputed  WorkOrderStatus = "disputed"
 	WorkOrderStatusRefunded  WorkOrderStatus = "refunded"
 )
 
@@ -26,7 +25,11 @@ type WorkOrder struct {
 	Status         WorkOrderStatus `json:"status"`
 	CriteriaCID    string          `json:"criteria_cid"`
 	DeliverableCID *string         `json:"deliverable_cid"`
-	NettingBatchID *uuid.UUID      `json:"netting_batch_id"`
+	FundedAt       *time.Time      `json:"funded_at"`
+	CompletedAt    *time.Time      `json:"completed_at"`
+	RefundedAt     *time.Time      `json:"refunded_at"`
+	OnchainOrderID *big.Int        `json:"onchain_order_id"`
+	FundingTxHash  *string         `json:"funding_tx_hash"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
