@@ -1,0 +1,23 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.33"
+
+# Networks configuration
+[rpc_endpoints]
+sepolia = "https://sepolia.infura.io/v3/${INFURA_API_KEY}"
+mainnet = "https://mainnet.infura.io/v3/${INFURA_API_KEY}"
+0g_mainnet = "https://evmrpc.0g.ai"
+0g_testnet_galileo = "https://evmrpc-testnet.0g.ai"
+localhost = "http://localhost:8545"
+
+[profile.0g_testnet]
+gas_price = 2000000001
+evm_version = "cancun"
+
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
+0g_mainnet = { key = "${ETHERSCAN_API_KEY}", url = "https://chainscan.0g.ai/open/api" }
+0g_testnet_galileo = { key = "${ETHERSCAN_API_KEY}", url = "https://chainscan-galileo.0g.ai/open/api" }
