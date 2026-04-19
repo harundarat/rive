@@ -16,11 +16,8 @@ func main() {
 	_ = application
 
 	server := &http.Server{
-		Addr: ":8080",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Hello world"))
-		}),
+		Addr:    ":8080",
+		Handler: application.Router,
 	}
 
 	log.Println("Server running on :8080")

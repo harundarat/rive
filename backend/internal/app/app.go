@@ -3,13 +3,16 @@ package app
 import (
 	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/harundarat/rive/backend/internal/config"
+	deliveryhttp "github.com/harundarat/rive/backend/internal/delivery/http"
 	"github.com/harundarat/rive/backend/internal/infrastructure/database"
 )
 
 type App struct {
 	Config *config.Config
+	Router http.Handler
 }
 
 func Initialize() (*App, error) {
@@ -25,7 +28,17 @@ func Initialize() (*App, error) {
 
 	_ = pgDB
 
+	// Repository Layer
+
+	// Usecase Layer
+
+	// Handler Layer
+	healthHandler := deliveryhttp.NewHealthHandler()
+
+	//Router
+	router := deliveryhttp.NewRouter(healthHandler)
+
 	log.Println("Starting application...")
 
-	return &App{Config: cfg}, nil
+	return &App{Config: cfg, Router: router}, nil
 }
