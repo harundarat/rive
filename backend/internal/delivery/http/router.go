@@ -9,6 +9,7 @@ func NewRouter(healthHandler *HealthHandler) *chi.Mux {
 
 		r.Route("/health", func(r chi.Router) {
 			r.Get("/", healthHandler.Check)
+			r.Post("/zgstorage", healthHandler.CheckUploadZGStorage)
 		})
 
 	})

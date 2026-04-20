@@ -42,8 +42,15 @@ func (d *DatabaseConfig) buildURL(scheme string) string {
 	return u.String()
 }
 
+type ZeroGStorageConfig struct {
+	EVMRPC     string `mapstructure:"ZG_EVM_RPC"`
+	IndexerRPC string `mapstructure:"ZG_STORAGE_INDEXER_RPC"`
+	PrivateKey string `mapstructure:"ZG_PRIVATE_KEY"`
+}
+
 type Config struct {
-	Database DatabaseConfig `mapstructure:",squash"`
+	Database DatabaseConfig     `mapstructure:",squash"`
+	ZeroG    ZeroGStorageConfig `mapstructure:",squash"`
 }
 
 func Load() (*Config, error) {
