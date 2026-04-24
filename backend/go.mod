@@ -10,6 +10,7 @@ require (
 	github.com/gowebpki/jcs v1.0.1
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/openweb3/web3go v0.2.9
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.21.0
 )
 
@@ -97,7 +98,6 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect

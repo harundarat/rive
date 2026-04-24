@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 
+	zgcommon "github.com/0gfoundation/0g-storage-client/common"
 	"github.com/0gfoundation/0g-storage-client/common/blockchain"
 	"github.com/0gfoundation/0g-storage-client/core"
 	"github.com/0gfoundation/0g-storage-client/indexer"
@@ -15,6 +16,7 @@ import (
 	"github.com/harundarat/rive/backend/internal/config"
 	"github.com/harundarat/rive/backend/internal/domain"
 	"github.com/openweb3/web3go"
+	"github.com/sirupsen/logrus"
 )
 
 type ZGClient struct {
@@ -24,7 +26,12 @@ type ZGClient struct {
 
 func NewZGStorageClient(cfg config.ZeroGStorageConfig) (*ZGClient, error) {
 	w3 := blockchain.MustNewWeb3(cfg.EVMRPC, cfg.PrivateKey)
-	idx, err := indexer.NewClient(cfg.IndexerRPC, indexer.IndexerClientOption{})
+	idx, err := indexer.NewClient(cfg.IndexerRPC, indexer.IndexerClientOption{
+		LogOption: zgcommon.LogOption{
+			LogLevel: logrus.InfoLevel,
+		},
+	})
+
 	if err != nil {
 		w3.Close()
 		return nil, err
