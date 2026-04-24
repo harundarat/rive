@@ -7,6 +7,7 @@ require (
 	github.com/ethereum/go-ethereum v1.15.11
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0
+	github.com/gowebpki/jcs v1.0.1
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/openweb3/web3go v0.2.9
 	github.com/spf13/viper v1.21.0

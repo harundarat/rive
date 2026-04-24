@@ -11,6 +11,7 @@ import (
 	"github.com/0gfoundation/0g-storage-client/indexer"
 	"github.com/0gfoundation/0g-storage-client/transfer"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/gowebpki/jcs"
 	"github.com/harundarat/rive/backend/internal/config"
 	"github.com/harundarat/rive/backend/internal/domain"
 	"github.com/openweb3/web3go"
@@ -37,8 +38,8 @@ func (c *ZGClient) Close() {
 }
 
 func (c *ZGClient) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
-	// 1. Marshal to JSON
-	jsonBytes, err := json.Marshal(data)
+	// 1. Marshal to canonical JSON
+	jsonBytes, err := canonicalJSONBytes(data)
 	if err != nil {
 		return nil, err
 	}
@@ -95,4 +96,13 @@ func (c *ZGClient) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOu
 	}
 
 	return &domain.ZGUploadOutput{TxHash: txHashes[0].String(), RootHash: roots[0].String()}, nil
+}
+
+func canonicalJSONBytes(data any) ([]byte, error) {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return jcs.Transform(jsonBytes)
 }
