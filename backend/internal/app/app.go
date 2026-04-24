@@ -40,12 +40,14 @@ func Initialize() (*App, error) {
 
 	// Usecase Layer
 	healthUsecase := usecase.NewHealthUsecase(zgClient)
+	workOrderUsecase := usecase.NewWorkOrderUsecase(zgClient)
 
 	// Handler Layer
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
+	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler)
+	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler)
 
 	log.Println("Starting application...")
 

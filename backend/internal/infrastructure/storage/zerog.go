@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 
 	"github.com/0gfoundation/0g-storage-client/common/blockchain"
@@ -35,7 +36,7 @@ func (c *ZGClient) Close() {
 	c.W3.Close()
 }
 
-func (c *ZGClient) UploadJSON(ctx context.Context, data map[string]any) (*domain.ZGUploadOutput, error) {
+func (c *ZGClient) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
 	// 1. Marshal to JSON
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
@@ -85,6 +86,12 @@ func (c *ZGClient) UploadJSON(ctx context.Context, data map[string]any) (*domain
 	txHashes, roots, err := c.Indexer.SplitableUpload(ctx, c.W3, file, fragmentSize, opt)
 	if err != nil {
 		return nil, err
+	}
+	if len(txHashes) == 0 {
+		return nil, errors.New("0g storage upload returned no transaction hashes")
+	}
+	if len(roots) == 0 {
+		return nil, errors.New("0g storage upload returned no root hashes")
 	}
 
 	return &domain.ZGUploadOutput{TxHash: txHashes[0].String(), RootHash: roots[0].String()}, nil
