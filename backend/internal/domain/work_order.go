@@ -24,6 +24,8 @@ type WorkOrder struct {
 	Amount         big.Int         `json:"amount"`
 	Status         WorkOrderStatus `json:"status"`
 	SpecHash       string          `json:"spec_hash"`
+	SpecVersion    string          `json:"spec_version"`
+	SpecTxHash     string          `json:"spec_tx_hash"`
 	DeliverableCID *string         `json:"deliverable_cid"`
 	FundedAt       *time.Time      `json:"funded_at"`
 	CompletedAt    *time.Time      `json:"completed_at"`

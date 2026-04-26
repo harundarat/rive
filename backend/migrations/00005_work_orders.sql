@@ -8,6 +8,8 @@
         amount DECIMAL(78,0) NOT NULL CHECK (amount > 0),
         status VARCHAR(255) NOT NULL CHECK (status IN ('draft', 'locked', 'completed', 'refunded')),
         spec_hash CHAR(66) UNIQUE NOT NULL CHECK (spec_hash ~ '^0x[0-9a-fA-F]{64}$'),
+        spec_version VARCHAR(32) NOT NULL,
+        spec_tx_hash CHAR(66) NOT NULL CHECK (spec_tx_hash ~ '^0x[0-9a-fA-F]{64}$'),
         deliverable_cid CHAR(66) CHECK (deliverable_cid ~ '^0x[0-9a-fA-F]{64}$'),
         funded_at TIMESTAMPTZ,
         completed_at TIMESTAMPTZ,
