@@ -1,5 +1,19 @@
 {
-  "escrowAddress": "0x41acbf0b405f53bd68bc314e1eaf0570136ec2b5",
-  "deployBlock": 31125499,
-  "deployTxHash": "0x5975ae7a2da80f2d87e36ddfa740bf952badc6eca1111032ab8a6bee6d5fde55"
+  "chainId": 16661,
+  "network": "0g-mainnet",
+  "contracts": {
+    "RiveUSD": {
+      "address": "0x209c1e2E13045BE0A50fA906BA0a7aB57474D016",
+      "deployBlock": 31532733,
+      "deployTxHash": "0xa9cf6f37366da87409c8a71d178bf2afc598f704cff963fdce012832b116933a"
+    },
+    "Escrow": {
+      "address": "0x9A335EeEBE025794f0E0917e5E1d8De4925B245c",
+      "deployBlock": 31532733,
+      "deployTxHash": "0x779ce3865a1265108701d2142549d0955126020f9c1a2f4c8440fa0fed3afb54",
+      "constructorArgs": {
+        "token": "0x209c1e2E13045BE0A50fA906BA0a7aB57474D016"
+      }
+    }
+  }
 }
