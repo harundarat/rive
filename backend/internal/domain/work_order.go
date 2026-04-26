@@ -23,7 +23,7 @@ type WorkOrder struct {
 	ProviderID     uuid.UUID       `json:"provider_id"`
 	Amount         big.Int         `json:"amount"`
 	Status         WorkOrderStatus `json:"status"`
-	CriteriaCID    string          `json:"criteria_cid"`
+	SpecHash       string          `json:"spec_hash"`
 	DeliverableCID *string         `json:"deliverable_cid"`
 	FundedAt       *time.Time      `json:"funded_at"`
 	CompletedAt    *time.Time      `json:"completed_at"`
