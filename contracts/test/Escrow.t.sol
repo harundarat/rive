@@ -4,12 +4,12 @@ pragma solidity 0.8.33;
 import {Test} from "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
 import {Escrow} from "../src/Escrow.sol";
+import {RiveUSD} from "../src/mocks/RiveUSD.sol";
 
 contract EscrowTest is Test {
-    ERC20Mock internal token;
+    RiveUSD internal token;
     Escrow internal escrow;
 
     address internal payer;
@@ -39,7 +39,7 @@ contract EscrowTest is Test {
         keeper = makeAddr("keeper");
         attacker = makeAddr("attacker");
 
-        token = new ERC20Mock();
+        token = new RiveUSD();
         escrow = new Escrow(IERC20(address(token)));
 
         token.mint(payer, INITIAL_BALANCE);
@@ -56,6 +56,23 @@ contract EscrowTest is Test {
     function test_Constructor_SetsTokenAndStartsCounter() public view {
         assertEq(address(escrow.token()), address(token));
         assertEq(escrow.nextOrderID(), 0);
+    }
+
+    function test_RiveUSD_Metadata() public view {
+        assertEq(token.name(), "Rive USD");
+        assertEq(token.symbol(), "rUSD");
+        assertEq(token.decimals(), 18);
+    }
+
+    function test_RiveUSD_PublicMint() public {
+        address minter = makeAddr("minter");
+        address recipient = makeAddr("recipient");
+        uint256 amount = 123e18;
+
+        vm.prank(minter);
+        token.mint(recipient, amount);
+
+        assertEq(token.balanceOf(recipient), amount);
     }
 
     function test_Constructor_RevertsForZeroTokenAddress() public {
