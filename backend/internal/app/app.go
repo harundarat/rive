@@ -46,9 +46,14 @@ func Initialize() (*App, error) {
 	// Handler Layer
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
 	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
+	quickNodeWebhookHandler := deliveryhttp.NewQuickNodeWebhookHandler(
+		cfg.QuickNodeWebhookSecret,
+		cfg.EscrowContractAddress,
+		workOrderUsecase,
+	)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler)
+	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler)
 
 	log.Println("Starting application...")
 
