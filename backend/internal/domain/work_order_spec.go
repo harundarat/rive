@@ -3,9 +3,12 @@ package domain
 import (
 	"context"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
-type WorkOrderSpecInput struct {
+type WorkOrderSpecRequest struct {
+	IdempotencyKey     string                            `json:"idempotency_key"`
 	Parties            WorkOrderSpecParties              `json:"parties"`
 	Task               WorkOrderSpecTask                 `json:"task"`
 	Deliverable        WorkOrderSpecDeliverable          `json:"deliverable"`
@@ -16,7 +19,7 @@ type WorkOrderSpecInput struct {
 
 type WorkOrderSpec struct {
 	Version            string                            `json:"version"`
-	ID                 string                            `json:"id"`
+	ID                 uuid.UUID                         `json:"id"`
 	CreatedAt          string                            `json:"createdAt"`
 	Parties            WorkOrderSpecParties              `json:"parties"`
 	Task               WorkOrderSpecTask                 `json:"task"`
@@ -59,14 +62,14 @@ type WorkOrderSpecCompensation struct {
 	Chain  string `json:"chain"`
 }
 
-type WorkOrderSpecUploadOutput struct {
-	ID       string `json:"id"`
-	RootHash string `json:"root_hash"`
-	TxHash   string `json:"tx_hash"`
+type WorkOrderSpecResponse struct {
+	ID       uuid.UUID `json:"id"`
+	RootHash string    `json:"root_hash"`
+	TxHash   string    `json:"tx_hash"`
 }
 
 type WorkOrderUsecase interface {
-	UploadSpec(ctx context.Context, input WorkOrderSpecInput) (*WorkOrderSpecUploadOutput, error)
+	UploadSpec(ctx context.Context, request WorkOrderSpecRequest) (*WorkOrderSpecResponse, error)
 }
 
 type ValidationError struct {

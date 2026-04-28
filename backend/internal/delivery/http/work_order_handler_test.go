@@ -9,17 +9,18 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/harundarat/rive/backend/internal/domain"
 )
 
 type fakeWorkOrderUsecase struct {
-	input  domain.WorkOrderSpecInput
-	output *domain.WorkOrderSpecUploadOutput
+	input  domain.WorkOrderSpecRequest
+	output *domain.WorkOrderSpecResponse
 	err    error
 }
 
-func (uc *fakeWorkOrderUsecase) UploadSpec(ctx context.Context, input domain.WorkOrderSpecInput) (*domain.WorkOrderSpecUploadOutput, error) {
-	uc.input = input
+func (uc *fakeWorkOrderUsecase) UploadSpec(ctx context.Context, request domain.WorkOrderSpecRequest) (*domain.WorkOrderSpecResponse, error) {
+	uc.input = request
 	if uc.err != nil {
 		return nil, uc.err
 	}
@@ -29,8 +30,8 @@ func (uc *fakeWorkOrderUsecase) UploadSpec(ctx context.Context, input domain.Wor
 
 func TestWorkOrderHandlerCreateSuccess(t *testing.T) {
 	usecase := &fakeWorkOrderUsecase{
-		output: &domain.WorkOrderSpecUploadOutput{
-			ID:       "wo_018f95e4-3f8d-7b70-a4dd-2d9a833c4a1f",
+		output: &domain.WorkOrderSpecResponse{
+			ID:       uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a1f"),
 			RootHash: "0xroot",
 			TxHash:   "0xtx",
 		},
@@ -49,8 +50,8 @@ func TestWorkOrderHandlerCreateSuccess(t *testing.T) {
 	}
 
 	var body struct {
-		Success bool                             `json:"success"`
-		Data    domain.WorkOrderSpecUploadOutput `json:"data"`
+		Success bool                         `json:"success"`
+		Data    domain.WorkOrderSpecResponse `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
@@ -100,7 +101,7 @@ func TestWorkOrderHandlerCreateValidationError(t *testing.T) {
 }
 
 func TestWorkOrderHandlerCreateUploadError(t *testing.T) {
-	handler := NewWorkOrderHandler(&fakeWorkOrderUsecase{err: errors.New("upload failed")})
+	handler := NewWorkOrderHandler(&fakeWorkOrderUsecase{err: errors.Join(domain.ErrStorage, errors.New("upload failed"))})
 	req := httptest.NewRequest(nethttp.MethodPost, "/api/work-orders", bytes.NewBufferString(validWorkOrderSpecJSON()))
 	rec := httptest.NewRecorder()
 
@@ -111,8 +112,33 @@ func TestWorkOrderHandlerCreateUploadError(t *testing.T) {
 	}
 }
 
+func TestWorkOrderHandlerCreatePersistenceError(t *testing.T) {
+	handler := NewWorkOrderHandler(&fakeWorkOrderUsecase{err: errors.Join(domain.ErrPersistence, errors.New("create failed"))})
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/work-orders", bytes.NewBufferString(validWorkOrderSpecJSON()))
+	rec := httptest.NewRecorder()
+
+	handler.Create(rec, req)
+
+	if rec.Code != nethttp.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d", rec.Code)
+	}
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.Error.Code != "FAILED_TO_CREATE_WORK_ORDER" {
+		t.Fatalf("expected persistence error code, got %q", body.Error.Code)
+	}
+}
+
 func validWorkOrderSpecJSON() string {
 	return `{
+		"idempotency_key": "wo-request-1",
 		"parties": {
 			"payer": "0xabc",
 			"payee": "0xdef"

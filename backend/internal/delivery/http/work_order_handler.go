@@ -20,9 +20,9 @@ func NewWorkOrderHandler(workOrderUsecase domain.WorkOrderUsecase) *WorkOrderHan
 }
 
 func (h *WorkOrderHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var input domain.WorkOrderSpecInput
+	var request domain.WorkOrderSpecRequest
 	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&input); err != nil {
+	if err := decoder.Decode(&request); err != nil {
 		response.Error(w, apierror.New(http.StatusBadRequest, "BAD_REQUEST", "invalid request payload"))
 		return
 	}
@@ -31,15 +31,23 @@ func (h *WorkOrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output, err := h.workOrderUsecase.UploadSpec(r.Context(), input)
+	output, err := h.workOrderUsecase.UploadSpec(r.Context(), request)
 	if err != nil {
 		var validationErr *domain.ValidationError
 		if errors.As(err, &validationErr) {
 			response.Error(w, apierror.New(http.StatusBadRequest, "BAD_REQUEST", validationErr.Error()))
 			return
 		}
+		if errors.Is(err, domain.ErrPersistence) {
+			response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_CREATE_WORK_ORDER", err.Error()))
+			return
+		}
+		if errors.Is(err, domain.ErrStorage) {
+			response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_0G_STORAGE", err.Error()))
+			return
+		}
 
-		response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_0G_STORAGE", err.Error()))
+		response.Error(w, apierror.New(http.StatusInternalServerError, "INTERNAL_ERROR", err.Error()))
 		return
 	}
 

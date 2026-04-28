@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,4 +14,8 @@ type Agent struct {
 	ReputationScore float64   `json:"reputation_score"`
 	MetadataCID     string    `json:"metadata_cid"`
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+type AgentRepository interface {
+	FindByWalletAddress(ctx context.Context, walletAddress string) (*Agent, error)
 }
