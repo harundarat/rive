@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -14,6 +15,7 @@ type DatabaseConfig struct {
 	Password     string `mapstructure:"DB_PASSWORD"`
 	Name         string `mapstructure:"DB_NAME"`
 	SSLMode      string `mapstructure:"DB_SSLMODE"`
+	SSLRootCert  string `mapstructure:"DB_SSLROOTCERT"`
 	MaxIdleConns int    `mapstructure:"DB_MAX_IDLE_CONN"`
 	MaxOpenConns int    `mapstructure:"DB_MAX_OPEN_CONN"`
 }
@@ -37,6 +39,9 @@ func (d *DatabaseConfig) buildURL(scheme string) string {
 
 	q := u.Query()
 	q.Set("sslmode", d.SSLMode)
+	if sslRootCert := strings.TrimSpace(d.SSLRootCert); sslRootCert != "" {
+		q.Set("sslrootcert", sslRootCert)
+	}
 	u.RawQuery = q.Encode()
 
 	return u.String()
@@ -49,8 +54,10 @@ type ZeroGStorageConfig struct {
 }
 
 type Config struct {
-	Database DatabaseConfig     `mapstructure:",squash"`
-	ZeroG    ZeroGStorageConfig `mapstructure:",squash"`
+	Database               DatabaseConfig     `mapstructure:",squash"`
+	ZeroG                  ZeroGStorageConfig `mapstructure:",squash"`
+	QuickNodeWebhookSecret string             `mapstructure:"QUICKNODE_WEBHOOK_SECRET"`
+	EscrowContractAddress  string             `mapstructure:"ESCROW_CONTRACT_ADDRESS"`
 }
 
 func Load() (*Config, error) {
