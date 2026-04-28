@@ -3,16 +3,16 @@
   "network": "0g-mainnet",
   "contracts": {
     "RiveUSD": {
-      "address": "0x209c1e2E13045BE0A50fA906BA0a7aB57474D016",
-      "deployBlock": 31532733,
-      "deployTxHash": "0xa9cf6f37366da87409c8a71d178bf2afc598f704cff963fdce012832b116933a"
+      "address": "0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0",
+      "deployBlock": 31664831,
+      "deployTxHash": "0xe3fc531cefc66de860f81aa4e7a596fedc3d862cfc460496de9507b40a30840b"
     },
     "Escrow": {
-      "address": "0x9A335EeEBE025794f0E0917e5E1d8De4925B245c",
-      "deployBlock": 31532733,
-      "deployTxHash": "0x779ce3865a1265108701d2142549d0955126020f9c1a2f4c8440fa0fed3afb54",
+      "address": "0xe3de5a57b960aeaa4d1d01b46665599067476b6d",
+      "deployBlock": 31664838,
+      "deployTxHash": "0xbe4d50ac9105969ac4c8b1c9ecb8fe39f9adc405e206ff390555bed8d11d4900",
       "constructorArgs": {
-        "token": "0x209c1e2E13045BE0A50fA906BA0a7aB57474D016"
+        "token": "0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0"
       }
     }
   }
