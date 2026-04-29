@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 
@@ -12,9 +11,9 @@ import (
 	"github.com/0gfoundation/0g-storage-client/indexer"
 	"github.com/0gfoundation/0g-storage-client/transfer"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/gowebpki/jcs"
 	"github.com/harundarat/rive/backend/internal/config"
 	"github.com/harundarat/rive/backend/internal/domain"
+	"github.com/harundarat/rive/backend/pkg/canonicaljson"
 	"github.com/openweb3/web3go"
 	"github.com/sirupsen/logrus"
 )
@@ -45,33 +44,35 @@ func (c *ZGClient) Close() {
 }
 
 func (c *ZGClient) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
-	// 1. Marshal to canonical JSON
 	jsonBytes, err := canonicalJSONBytes(data)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Write to temp file
-	tmpFile, err := os.CreateTemp("", "rive-*.json")
+	return c.UploadBytes(ctx, jsonBytes)
+}
+
+func (c *ZGClient) UploadBytes(ctx context.Context, data []byte) (*domain.ZGUploadOutput, error) {
+	tmpFile, err := os.CreateTemp("", "rive-*")
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(tmpFile.Name())
 
-	_, err = tmpFile.Write(jsonBytes)
-	if err != nil {
+	if _, err = tmpFile.Write(data); err != nil {
+		tmpFile.Close()
 		return nil, err
 	}
-	tmpFile.Close()
+	if err = tmpFile.Close(); err != nil {
+		return nil, err
+	}
 
-	// 3. Open with 0G SDK
 	file, err := core.Open(tmpFile.Name())
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	// 4. Upload
 	opt := transfer.UploadOption{
 		Submitter:        common.Address{},
 		Tags:             nil,
@@ -106,10 +107,5 @@ func (c *ZGClient) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOu
 }
 
 func canonicalJSONBytes(data any) ([]byte, error) {
-	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
-
-	return jcs.Transform(jsonBytes)
+	return canonicaljson.Bytes(data)
 }

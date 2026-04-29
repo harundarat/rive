@@ -39,6 +39,16 @@ func (s *fakeZGStorage) UploadJSON(ctx context.Context, data any) (*domain.ZGUpl
 	return &domain.ZGUploadOutput{RootHash: testRootHash, TxHash: testTxHash}, nil
 }
 
+func (s *fakeZGStorage) UploadBytes(ctx context.Context, data []byte) (*domain.ZGUploadOutput, error) {
+	s.calls++
+	s.data = data
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return &domain.ZGUploadOutput{RootHash: testRootHash, TxHash: testTxHash}, nil
+}
+
 type fakeWorkOrderRepository struct {
 	byIdempotencyKey       map[string]domain.WorkOrder
 	findErr                error

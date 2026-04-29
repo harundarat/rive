@@ -9,4 +9,5 @@ type ZGUploadOutput struct {
 
 type ZGStorage interface {
 	UploadJSON(ctx context.Context, data any) (*ZGUploadOutput, error)
+	UploadBytes(ctx context.Context, data []byte) (*ZGUploadOutput, error)
 }
