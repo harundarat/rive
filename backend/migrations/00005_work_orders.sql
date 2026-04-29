@@ -13,7 +13,7 @@
         deliverable_cid CHAR(66) CHECK (deliverable_cid ~ '^0x[0-9a-fA-F]{64}$'),
         completed_at TIMESTAMPTZ,
         refunded_at TIMESTAMPTZ,
-        onchain_order_id NUMERIC(78,0),
+        onchain_order_id NUMERIC(78,0) UNIQUE,
         order_tx_hash CHAR(66) CHECK (order_tx_hash ~ '^0x[0-9a-fA-F]{64}$'),
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
