@@ -46,6 +46,7 @@ func Initialize() (*App, error) {
 	// Handler Layer
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
 	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
+	storageHandler := deliveryhttp.NewStorageHandler(zgClient)
 	quickNodeWebhookHandler := deliveryhttp.NewQuickNodeWebhookHandler(
 		cfg.QuickNodeWebhookSecret,
 		cfg.EscrowContractAddress,
@@ -53,7 +54,7 @@ func Initialize() (*App, error) {
 	)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler)
+	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler)
 
 	log.Println("Starting application...")
 
