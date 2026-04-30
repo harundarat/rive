@@ -68,8 +68,20 @@ type WorkOrderSpecResponse struct {
 	TxHash   string    `json:"tx_hash"`
 }
 
+type WorkOrderDeliveryRequest struct {
+	DeliveryHash string `json:"deliveryHash"`
+	Signature    string `json:"signature"`
+}
+
+type WorkOrderDeliveryResponse struct {
+	OnchainOrderID string `json:"onchain_order_id"`
+	DeliverableCID string `json:"deliverable_cid"`
+	DeliveredAt    string `json:"delivered_at"`
+}
+
 type WorkOrderUsecase interface {
 	UploadSpec(ctx context.Context, request WorkOrderSpecRequest) (*WorkOrderSpecResponse, error)
+	SubmitDelivery(ctx context.Context, onchainOrderID string, request WorkOrderDeliveryRequest) (*WorkOrderDeliveryResponse, error)
 }
 
 type ValidationError struct {

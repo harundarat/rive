@@ -2,17 +2,23 @@ package usecase
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"github.com/harundarat/rive/backend/internal/domain"
 )
 
 const workOrderSpecVersion = "1.0"
+
+var hex32Pattern = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
 type WorkOrderUsecase struct {
 	zgStorage           domain.ZGStorage
@@ -116,6 +122,58 @@ func (uc *WorkOrderUsecase) UploadSpec(ctx context.Context, request domain.WorkO
 		ID:       spec.ID,
 		RootHash: uploadOutput.RootHash,
 		TxHash:   uploadOutput.TxHash,
+	}, nil
+}
+
+func (uc *WorkOrderUsecase) SubmitDelivery(ctx context.Context, onchainOrderID string, request domain.WorkOrderDeliveryRequest) (*domain.WorkOrderDeliveryResponse, error) {
+	orderID, normalizedOrderID, err := parseOnchainOrderID(onchainOrderID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateWorkOrderDeliveryRequest(request); err != nil {
+		return nil, err
+	}
+
+	target, err := uc.workOrderRepository.FindDeliveryTargetByOnchainOrderID(ctx, orderID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: find delivery target: %w", domain.ErrPersistence, err)
+	}
+
+	message := fmt.Sprintf("deliver:%s:%s", normalizedOrderID, request.DeliveryHash)
+	recoveredAddress, err := recoverEthereumAddress(message, request.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidSignature, err)
+	}
+	if !strings.EqualFold(recoveredAddress, target.Payee) {
+		return nil, domain.ErrPayeeMismatch
+	}
+	if target.WorkOrder.Status != domain.WorkOrderStatusFunded {
+		return nil, domain.ErrOrderNotFunded
+	}
+	if target.WorkOrder.DeliverableCID != nil {
+		return nil, domain.ErrDeliveryAlreadyPosted
+	}
+
+	deliveredAt := uc.now().UTC()
+	updated, err := uc.workOrderRepository.SubmitDelivery(ctx, domain.WorkOrderDeliveryUpdate{
+		OnchainOrderID: orderID,
+		DeliveryHash:   request.DeliveryHash,
+		DeliveredAt:    deliveredAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: submit delivery: %w", domain.ErrPersistence, err)
+	}
+	if !updated {
+		return nil, uc.classifyDeliveryUpdateConflict(ctx, orderID)
+	}
+
+	return &domain.WorkOrderDeliveryResponse{
+		OnchainOrderID: normalizedOrderID,
+		DeliverableCID: request.DeliveryHash,
+		DeliveredAt:    deliveredAt.Format(time.RFC3339),
 	}, nil
 }
 
@@ -243,6 +301,27 @@ func validateWorkOrderSpecRequest(request domain.WorkOrderSpecRequest) error {
 	return nil
 }
 
+func validateWorkOrderDeliveryRequest(request domain.WorkOrderDeliveryRequest) error {
+	if isBlank(request.DeliveryHash) {
+		return domain.NewValidationError("deliveryHash is required")
+	}
+	if !hex32Pattern.MatchString(request.DeliveryHash) {
+		return domain.NewValidationError("deliveryHash must be a 0x-prefixed 32-byte hex string")
+	}
+	if isBlank(request.Signature) {
+		return domain.NewValidationError("signature is required")
+	}
+	if !strings.HasPrefix(request.Signature, "0x") && !strings.HasPrefix(request.Signature, "0X") {
+		return domain.NewValidationError("signature must be a 0x-prefixed 65-byte hex string")
+	}
+	signatureBytes, err := hex.DecodeString(trimHexPrefix(request.Signature))
+	if err != nil || len(signatureBytes) != 65 {
+		return domain.NewValidationError("signature must be a 0x-prefixed 65-byte hex string")
+	}
+
+	return nil
+}
+
 func (uc *WorkOrderUsecase) findAgentByWallet(ctx context.Context, fieldName string, walletAddress string) (*domain.Agent, error) {
 	agent, err := uc.agentRepository.FindByWalletAddress(ctx, walletAddress)
 	if errors.Is(err, domain.ErrNotFound) {
@@ -264,6 +343,62 @@ func parseWorkOrderAmount(value string) (big.Int, error) {
 	return *amount, nil
 }
 
+func parseOnchainOrderID(value string) (big.Int, string, error) {
+	trimmed := strings.TrimSpace(value)
+	orderID := new(big.Int)
+	if trimmed == "" {
+		return big.Int{}, "", domain.NewValidationError("onchainOrderID is required")
+	}
+	if _, ok := orderID.SetString(trimmed, 10); !ok || orderID.Sign() <= 0 {
+		return big.Int{}, "", domain.NewValidationError("onchainOrderID must be a positive integer")
+	}
+
+	return *orderID, trimmed, nil
+}
+
+func recoverEthereumAddress(message string, signature string) (string, error) {
+	signatureBytes, err := hex.DecodeString(trimHexPrefix(signature))
+	if err != nil {
+		return "", err
+	}
+	if len(signatureBytes) != 65 {
+		return "", fmt.Errorf("invalid signature length: %d", len(signatureBytes))
+	}
+
+	switch signatureBytes[64] {
+	case 27, 28:
+		signatureBytes[64] -= 27
+	case 0, 1:
+	default:
+		return "", fmt.Errorf("invalid signature recovery id")
+	}
+
+	publicKey, err := crypto.SigToPub(accounts.TextHash([]byte(message)), signatureBytes)
+	if err != nil {
+		return "", err
+	}
+
+	return crypto.PubkeyToAddress(*publicKey).Hex(), nil
+}
+
+func (uc *WorkOrderUsecase) classifyDeliveryUpdateConflict(ctx context.Context, onchainOrderID big.Int) error {
+	target, err := uc.workOrderRepository.FindDeliveryTargetByOnchainOrderID(ctx, onchainOrderID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("%w: refresh delivery target: %w", domain.ErrPersistence, err)
+	}
+	if target.WorkOrder.Status != domain.WorkOrderStatusFunded {
+		return domain.ErrOrderNotFunded
+	}
+	if target.WorkOrder.DeliverableCID != nil {
+		return domain.ErrDeliveryAlreadyPosted
+	}
+
+	return domain.ErrDeliveryAlreadyPosted
+}
+
 func workOrderSpecResponseFromWorkOrder(workOrder *domain.WorkOrder) *domain.WorkOrderSpecResponse {
 	return &domain.WorkOrderSpecResponse{
 		ID:       workOrder.ID,
@@ -274,4 +409,8 @@ func workOrderSpecResponseFromWorkOrder(workOrder *domain.WorkOrder) *domain.Wor
 
 func isBlank(value string) bool {
 	return strings.TrimSpace(value) == ""
+}
+
+func trimHexPrefix(value string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(value, "0x"), "0X")
 }

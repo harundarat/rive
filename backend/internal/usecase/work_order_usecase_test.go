@@ -2,11 +2,15 @@ package usecase
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"errors"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"github.com/harundarat/rive/backend/internal/domain"
 )
@@ -59,21 +63,28 @@ type fakeWorkOrderRepository struct {
 	releaseRollbackErr     error
 	refundErr              error
 	refundRollbackErr      error
+	deliveryFindErr        error
+	submitDeliveryErr      error
 	created                *domain.WorkOrder
+	deliveryTarget         *domain.WorkOrderDeliveryTarget
 	recordInput            *domain.OrderCreatedWorkOrderUpdate
 	rollbackInput          *domain.OrderCreatedWorkOrderRollback
 	releaseInput           *domain.OrderReleasedWorkOrderUpdate
 	releaseRollbackInput   *domain.OrderReleasedWorkOrderRollback
 	refundInput            *domain.OrderRefundedWorkOrderUpdate
 	refundRollbackInput    *domain.OrderRefundedWorkOrderRollback
+	submitDeliveryInput    *domain.WorkOrderDeliveryUpdate
 	recordUpdated          bool
 	rollbackUpdated        bool
 	releaseUpdated         bool
 	releaseRollbackUpdated bool
 	refundUpdated          bool
 	refundRollbackUpdated  bool
+	submitDeliveryUpdated  bool
 	findCalls              int
 	createCalls            int
+	deliveryFindCalls      int
+	submitDeliveryCalls    int
 	recordCalls            int
 	rollbackCalls          int
 	releaseCalls           int
@@ -97,6 +108,24 @@ func (r *fakeWorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idem
 	return nil, domain.ErrNotFound
 }
 
+func (r *fakeWorkOrderRepository) FindDeliveryTargetByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrderDeliveryTarget, error) {
+	r.deliveryFindCalls++
+	if r.deliveryFindErr != nil {
+		return nil, r.deliveryFindErr
+	}
+	if r.deliveryTarget == nil {
+		return nil, domain.ErrNotFound
+	}
+
+	copy := *r.deliveryTarget
+	copy.WorkOrder.Amount = *new(big.Int).Set(&r.deliveryTarget.WorkOrder.Amount)
+	if r.deliveryTarget.WorkOrder.OnchainOrderID != nil {
+		copy.WorkOrder.OnchainOrderID = new(big.Int).Set(r.deliveryTarget.WorkOrder.OnchainOrderID)
+	}
+
+	return &copy, nil
+}
+
 func (r *fakeWorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkOrder) error {
 	r.createCalls++
 	copy := workOrder
@@ -110,6 +139,17 @@ func (r *fakeWorkOrderRepository) Create(ctx context.Context, workOrder domain.W
 	r.byIdempotencyKey[workOrder.IdempotencyKey] = copy
 
 	return nil
+}
+
+func (r *fakeWorkOrderRepository) SubmitDelivery(ctx context.Context, update domain.WorkOrderDeliveryUpdate) (bool, error) {
+	r.submitDeliveryCalls++
+	copy := update
+	r.submitDeliveryInput = &copy
+	if r.submitDeliveryErr != nil {
+		return false, r.submitDeliveryErr
+	}
+
+	return r.submitDeliveryUpdated, nil
 }
 
 func (r *fakeWorkOrderRepository) RecordOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (bool, error) {
@@ -758,6 +798,125 @@ func TestWorkOrderUsecaseReleaseAndRefundEventsReturnPersistenceError(t *testing
 	}
 }
 
+func TestWorkOrderUsecaseSubmitDeliverySuccess(t *testing.T) {
+	payeeKey := mustGenerateKey(t)
+	payee := crypto.PubkeyToAddress(payeeKey.PublicKey).Hex()
+	orderID := "123"
+	deliveryHash := testRootHash
+	workOrders := &fakeWorkOrderRepository{
+		deliveryTarget:        validDeliveryTarget(payee, domain.WorkOrderStatusFunded, nil),
+		submitDeliveryUpdated: true,
+	}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	output, err := uc.SubmitDelivery(context.Background(), orderID, signedDeliveryRequest(t, payeeKey, orderID, deliveryHash))
+	if err != nil {
+		t.Fatalf("SubmitDelivery returned error: %v", err)
+	}
+
+	if output.OnchainOrderID != orderID {
+		t.Fatalf("expected onchain order id %q, got %q", orderID, output.OnchainOrderID)
+	}
+	if output.DeliverableCID != deliveryHash {
+		t.Fatalf("expected deliverable cid %q, got %q", deliveryHash, output.DeliverableCID)
+	}
+	if output.DeliveredAt != fixedTime.Format(time.RFC3339) {
+		t.Fatalf("expected delivered_at %q, got %q", fixedTime.Format(time.RFC3339), output.DeliveredAt)
+	}
+	if workOrders.submitDeliveryInput == nil {
+		t.Fatal("expected repository submit delivery call")
+	}
+	if workOrders.submitDeliveryInput.OnchainOrderID.String() != orderID {
+		t.Fatalf("expected repository order id %q, got %q", orderID, workOrders.submitDeliveryInput.OnchainOrderID.String())
+	}
+	if workOrders.submitDeliveryInput.DeliveryHash != deliveryHash {
+		t.Fatalf("expected repository delivery hash %q, got %q", deliveryHash, workOrders.submitDeliveryInput.DeliveryHash)
+	}
+	if !workOrders.submitDeliveryInput.DeliveredAt.Equal(fixedTime) {
+		t.Fatalf("expected repository delivered_at %s, got %s", fixedTime, workOrders.submitDeliveryInput.DeliveredAt)
+	}
+}
+
+func TestWorkOrderUsecaseSubmitDeliveryRejectsNonPayeeSignature(t *testing.T) {
+	payeeKey := mustGenerateKey(t)
+	otherKey := mustGenerateKey(t)
+	payee := crypto.PubkeyToAddress(payeeKey.PublicKey).Hex()
+	workOrders := &fakeWorkOrderRepository{
+		deliveryTarget: validDeliveryTarget(payee, domain.WorkOrderStatusFunded, nil),
+	}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	_, err := uc.SubmitDelivery(context.Background(), "123", signedDeliveryRequest(t, otherKey, "123", testRootHash))
+	if !errors.Is(err, domain.ErrPayeeMismatch) {
+		t.Fatalf("expected payee mismatch error, got %v", err)
+	}
+	if workOrders.submitDeliveryCalls != 0 {
+		t.Fatalf("expected no submit delivery call, got %d", workOrders.submitDeliveryCalls)
+	}
+}
+
+func TestWorkOrderUsecaseSubmitDeliveryRejectsNonFundedOrder(t *testing.T) {
+	payeeKey := mustGenerateKey(t)
+	payee := crypto.PubkeyToAddress(payeeKey.PublicKey).Hex()
+
+	for _, status := range []domain.WorkOrderStatus{
+		domain.WorkOrderStatusDraft,
+		domain.WorkOrderStatusCompleted,
+		domain.WorkOrderStatusRefunded,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			workOrders := &fakeWorkOrderRepository{
+				deliveryTarget: validDeliveryTarget(payee, status, nil),
+			}
+			uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+			_, err := uc.SubmitDelivery(context.Background(), "123", signedDeliveryRequest(t, payeeKey, "123", testRootHash))
+			if !errors.Is(err, domain.ErrOrderNotFunded) {
+				t.Fatalf("expected order not funded error, got %v", err)
+			}
+			if workOrders.submitDeliveryCalls != 0 {
+				t.Fatalf("expected no submit delivery call, got %d", workOrders.submitDeliveryCalls)
+			}
+		})
+	}
+}
+
+func TestWorkOrderUsecaseSubmitDeliveryRejectsExistingDelivery(t *testing.T) {
+	payeeKey := mustGenerateKey(t)
+	payee := crypto.PubkeyToAddress(payeeKey.PublicKey).Hex()
+	existingDelivery := testRootHash
+	workOrders := &fakeWorkOrderRepository{
+		deliveryTarget: validDeliveryTarget(payee, domain.WorkOrderStatusFunded, &existingDelivery),
+	}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	_, err := uc.SubmitDelivery(context.Background(), "123", signedDeliveryRequest(t, payeeKey, "123", testRootHash))
+	if !errors.Is(err, domain.ErrDeliveryAlreadyPosted) {
+		t.Fatalf("expected delivery already posted error, got %v", err)
+	}
+	if workOrders.submitDeliveryCalls != 0 {
+		t.Fatalf("expected no submit delivery call, got %d", workOrders.submitDeliveryCalls)
+	}
+}
+
+func TestWorkOrderUsecaseSubmitDeliveryClassifiesUpdateRaceAsConflict(t *testing.T) {
+	payeeKey := mustGenerateKey(t)
+	payee := crypto.PubkeyToAddress(payeeKey.PublicKey).Hex()
+	workOrders := &fakeWorkOrderRepository{
+		deliveryTarget:        validDeliveryTarget(payee, domain.WorkOrderStatusFunded, nil),
+		submitDeliveryUpdated: false,
+	}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	_, err := uc.SubmitDelivery(context.Background(), "123", signedDeliveryRequest(t, payeeKey, "123", testRootHash))
+	if !errors.Is(err, domain.ErrDeliveryAlreadyPosted) {
+		t.Fatalf("expected delivery already posted error, got %v", err)
+	}
+	if workOrders.deliveryFindCalls != 2 {
+		t.Fatalf("expected delivery target to be fetched twice, got %d", workOrders.deliveryFindCalls)
+	}
+}
+
 func newTestWorkOrderUsecase(
 	storage *fakeZGStorage,
 	workOrders *fakeWorkOrderRepository,
@@ -821,4 +980,53 @@ func bigIntFromString(value string) big.Int {
 	}
 
 	return *amount
+}
+
+func validDeliveryTarget(payee string, status domain.WorkOrderStatus, deliverableCID *string) *domain.WorkOrderDeliveryTarget {
+	orderID := bigIntFromString("123")
+
+	return &domain.WorkOrderDeliveryTarget{
+		Payee: payee,
+		WorkOrder: domain.WorkOrder{
+			ID:             fixedWorkOrderID,
+			IdempotencyKey: "wo-request-1",
+			CreatorID:      fixedPayerID,
+			ProviderID:     fixedPayeeID,
+			Amount:         bigIntFromString("1000000"),
+			Status:         status,
+			SpecHash:       testRootHash,
+			SpecVersion:    "1.0",
+			SpecTxHash:     testTxHash,
+			DeliverableCID: deliverableCID,
+			OnchainOrderID: &orderID,
+			CreatedAt:      fixedTime,
+			UpdatedAt:      fixedTime,
+		},
+	}
+}
+
+func mustGenerateKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	return key
+}
+
+func signedDeliveryRequest(t *testing.T, key *ecdsa.PrivateKey, orderID string, deliveryHash string) domain.WorkOrderDeliveryRequest {
+	t.Helper()
+
+	message := "deliver:" + orderID + ":" + deliveryHash
+	signature, err := crypto.Sign(accounts.TextHash([]byte(message)), key)
+	if err != nil {
+		t.Fatalf("failed to sign delivery message: %v", err)
+	}
+
+	return domain.WorkOrderDeliveryRequest{
+		DeliveryHash: deliveryHash,
+		Signature:    "0x" + hex.EncodeToString(signature),
+	}
 }

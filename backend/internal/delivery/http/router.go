@@ -7,6 +7,7 @@ func NewRouter(healthHandler *HealthHandler, workOrderHandler *WorkOrderHandler,
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/work-orders", workOrderHandler.Create)
+		r.Post("/work-orders/{onchainOrderID}/delivery", workOrderHandler.SubmitDelivery)
 		r.Post("/storage/upload", storageHandler.Upload)
 		r.Post("/webhooks/quicknode/escrow-events", quickNodeWebhookHandler.HandleEscrowEvents)
 

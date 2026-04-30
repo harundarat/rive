@@ -40,6 +40,7 @@ func (r *WorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idempote
 			spec_version,
 			spec_tx_hash,
 			deliverable_cid,
+			delivered_at,
 			completed_at,
 			refunded_at,
 			onchain_order_id::text,
@@ -59,6 +60,42 @@ func (r *WorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idempote
 	return workOrder, nil
 }
 
+func (r *WorkOrderRepository) FindDeliveryTargetByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrderDeliveryTarget, error) {
+	var payee string
+	workOrder, err := scanWorkOrderWithExtra(r.db.QueryRow(ctx, `
+		SELECT
+			work_orders.id,
+			work_orders.idempotency_key,
+			work_orders.creator_id,
+			work_orders.provider_id,
+			work_orders.amount::text,
+			work_orders.status,
+			work_orders.spec_hash,
+			work_orders.spec_version,
+			work_orders.spec_tx_hash,
+			work_orders.deliverable_cid,
+			work_orders.delivered_at,
+			work_orders.completed_at,
+			work_orders.refunded_at,
+			work_orders.onchain_order_id::text,
+			work_orders.order_tx_hash,
+			work_orders.created_at,
+			work_orders.updated_at,
+			payee.wallet_address
+		FROM work_orders
+		INNER JOIN agents payee ON payee.id = work_orders.provider_id
+		WHERE work_orders.onchain_order_id = $1::numeric
+	`, onchainOrderID.String()), &payee)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find delivery target by onchain order id: %w", err)
+	}
+
+	return &domain.WorkOrderDeliveryTarget{WorkOrder: *workOrder, Payee: payee}, nil
+}
+
 func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkOrder) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO work_orders (
@@ -72,6 +109,7 @@ func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkO
 			spec_version,
 			spec_tx_hash,
 			deliverable_cid,
+			delivered_at,
 			completed_at,
 			refunded_at,
 			onchain_order_id,
@@ -79,7 +117,7 @@ func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkO
 			created_at,
 			updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11, $12, $13::numeric, $14, $15, $16
+			$1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11, $12, $13, $14::numeric, $15, $16, $17
 		)
 	`,
 		workOrder.ID,
@@ -92,6 +130,7 @@ func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkO
 		workOrder.SpecVersion,
 		workOrder.SpecTxHash,
 		stringValue(workOrder.DeliverableCID),
+		timeValue(workOrder.DeliveredAt),
 		timeValue(workOrder.CompletedAt),
 		timeValue(workOrder.RefundedAt),
 		bigIntValue(workOrder.OnchainOrderID),
@@ -104,6 +143,29 @@ func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkO
 	}
 
 	return nil
+}
+
+func (r *WorkOrderRepository) SubmitDelivery(ctx context.Context, update domain.WorkOrderDeliveryUpdate) (bool, error) {
+	commandTag, err := r.db.Exec(ctx, `
+		UPDATE work_orders
+		SET
+			deliverable_cid = $1,
+			delivered_at = $2,
+			updated_at = $2
+		WHERE onchain_order_id = $3::numeric
+			AND status = $4
+			AND deliverable_cid IS NULL
+	`,
+		update.DeliveryHash,
+		update.DeliveredAt,
+		update.OnchainOrderID.String(),
+		string(domain.WorkOrderStatusFunded),
+	)
+	if err != nil {
+		return false, fmt.Errorf("submit delivery: %w", err)
+	}
+
+	return commandTag.RowsAffected() > 0, nil
 }
 
 func (r *WorkOrderRepository) RecordOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (bool, error) {
@@ -289,16 +351,21 @@ func (r *WorkOrderRepository) RollbackOrderRefunded(ctx context.Context, event d
 }
 
 func scanWorkOrder(row pgx.Row) (*domain.WorkOrder, error) {
+	return scanWorkOrderWithExtra(row)
+}
+
+func scanWorkOrderWithExtra(row pgx.Row, extraDest ...any) (*domain.WorkOrder, error) {
 	var workOrder domain.WorkOrder
 	var amountText string
 	var status string
 	var deliverableCID pgtype.Text
+	var deliveredAt pgtype.Timestamptz
 	var completedAt pgtype.Timestamptz
 	var refundedAt pgtype.Timestamptz
 	var onchainOrderIDText pgtype.Text
 	var orderTxHash pgtype.Text
 
-	if err := row.Scan(
+	dest := []any{
 		&workOrder.ID,
 		&workOrder.IdempotencyKey,
 		&workOrder.CreatorID,
@@ -309,13 +376,17 @@ func scanWorkOrder(row pgx.Row) (*domain.WorkOrder, error) {
 		&workOrder.SpecVersion,
 		&workOrder.SpecTxHash,
 		&deliverableCID,
+		&deliveredAt,
 		&completedAt,
 		&refundedAt,
 		&onchainOrderIDText,
 		&orderTxHash,
 		&workOrder.CreatedAt,
 		&workOrder.UpdatedAt,
-	); err != nil {
+	}
+	dest = append(dest, extraDest...)
+
+	if err := row.Scan(dest...); err != nil {
 		return nil, err
 	}
 
@@ -329,6 +400,10 @@ func scanWorkOrder(row pgx.Row) (*domain.WorkOrder, error) {
 	if deliverableCID.Valid {
 		value := deliverableCID.String
 		workOrder.DeliverableCID = &value
+	}
+	if deliveredAt.Valid {
+		value := deliveredAt.Time
+		workOrder.DeliveredAt = &value
 	}
 	if completedAt.Valid {
 		value := completedAt.Time

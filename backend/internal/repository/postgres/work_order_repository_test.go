@@ -21,6 +21,8 @@ type fakeWorkOrderDB struct {
 }
 
 func (db *fakeWorkOrderDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	db.sql = sql
+	db.args = args
 	return fakeWorkOrderRow{}
 }
 
@@ -294,6 +296,66 @@ func TestWorkOrderRepositoryRollbackOrderRefundedRestoresFundedStatus(t *testing
 	assertArg(t, db.args, 3, "1000000")
 	assertArg(t, db.args, 4, string(domain.WorkOrderStatusRefunded))
 	assertArg(t, db.args, 5, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
+}
+
+func TestWorkOrderRepositoryFindDeliveryTargetUsesOnchainOrderIDAndPayeeJoin(t *testing.T) {
+	db := &fakeWorkOrderDB{}
+	repo := &WorkOrderRepository{db: db}
+	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
+
+	_, err := repo.FindDeliveryTargetByOnchainOrderID(context.Background(), largeOrderID)
+	if err == nil {
+		t.Fatal("expected fake scan error")
+	}
+
+	for _, expected := range []string{
+		"payee.wallet_address",
+		"INNER JOIN agents payee ON payee.id = work_orders.provider_id",
+		"WHERE work_orders.onchain_order_id = $1::numeric",
+	} {
+		if !strings.Contains(db.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		}
+	}
+	assertArg(t, db.args, 0, largeOrderID.String())
+}
+
+func TestWorkOrderRepositorySubmitDeliveryStoresDeliverableCIDWithFundedAndUndeliveredPredicates(t *testing.T) {
+	db := &fakeWorkOrderDB{rowsAffected: 1}
+	repo := &WorkOrderRepository{db: db}
+	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
+	deliveredAt := time.Date(2026, 4, 22, 11, 20, 0, 0, time.UTC)
+	deliveryHash := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	updated, err := repo.SubmitDelivery(context.Background(), domain.WorkOrderDeliveryUpdate{
+		OnchainOrderID: largeOrderID,
+		DeliveryHash:   deliveryHash,
+		DeliveredAt:    deliveredAt,
+	})
+	if err != nil {
+		t.Fatalf("SubmitDelivery returned error: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected updated=true")
+	}
+
+	for _, expected := range []string{
+		"deliverable_cid = $1",
+		"delivered_at = $2",
+		"updated_at = $2",
+		"onchain_order_id = $3::numeric",
+		"status = $4",
+		"deliverable_cid IS NULL",
+	} {
+		if !strings.Contains(db.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		}
+	}
+
+	assertArg(t, db.args, 0, deliveryHash)
+	assertArg(t, db.args, 1, deliveredAt)
+	assertArg(t, db.args, 2, largeOrderID.String())
+	assertArg(t, db.args, 3, string(domain.WorkOrderStatusFunded))
 }
 
 func TestWorkOrderRepositoryRecordOrderCreatedReturnsFalseWhenPredicateDoesNotMatch(t *testing.T) {
