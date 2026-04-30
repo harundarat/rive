@@ -240,6 +240,8 @@ func (h *QuickNodeWebhookHandler) updateWorkOrderFromEscrowEvent(ctx context.Con
 				Amount:          copyBigInt(event.Amount),
 				OnchainOrderID:  copyBigInt(event.OrderID),
 				TransactionHash: event.TransactionHash,
+				BlockNumber:     event.BlockNumber,
+				LogIndex:        event.LogIndex,
 				RolledBackAt:    now,
 			})
 		}
@@ -251,39 +253,53 @@ func (h *QuickNodeWebhookHandler) updateWorkOrderFromEscrowEvent(ctx context.Con
 			Amount:          copyBigInt(event.Amount),
 			OnchainOrderID:  copyBigInt(event.OrderID),
 			TransactionHash: event.TransactionHash,
+			BlockNumber:     event.BlockNumber,
+			LogIndex:        event.LogIndex,
 			RecordedAt:      now,
 		})
 	case escrowEventOrderReleased:
 		if event.Removed {
 			return h.workOrderEvents.RollbackOrderReleased(ctx, domain.OrderReleasedWorkOrderRollback{
-				Payee:          event.Payee,
-				Amount:         copyBigInt(event.Amount),
-				OnchainOrderID: copyBigInt(event.OrderID),
-				RolledBackAt:   now,
+				Payee:           event.Payee,
+				Amount:          copyBigInt(event.Amount),
+				OnchainOrderID:  copyBigInt(event.OrderID),
+				TransactionHash: event.TransactionHash,
+				BlockNumber:     event.BlockNumber,
+				LogIndex:        event.LogIndex,
+				RolledBackAt:    now,
 			})
 		}
 
 		return h.workOrderEvents.RecordOrderReleased(ctx, domain.OrderReleasedWorkOrderUpdate{
-			Payee:          event.Payee,
-			Amount:         copyBigInt(event.Amount),
-			OnchainOrderID: copyBigInt(event.OrderID),
-			RecordedAt:     now,
+			Payee:           event.Payee,
+			Amount:          copyBigInt(event.Amount),
+			OnchainOrderID:  copyBigInt(event.OrderID),
+			TransactionHash: event.TransactionHash,
+			BlockNumber:     event.BlockNumber,
+			LogIndex:        event.LogIndex,
+			RecordedAt:      now,
 		})
 	case escrowEventOrderRefunded:
 		if event.Removed {
 			return h.workOrderEvents.RollbackOrderRefunded(ctx, domain.OrderRefundedWorkOrderRollback{
-				Payer:          event.Payer,
-				Amount:         copyBigInt(event.Amount),
-				OnchainOrderID: copyBigInt(event.OrderID),
-				RolledBackAt:   now,
+				Payer:           event.Payer,
+				Amount:          copyBigInt(event.Amount),
+				OnchainOrderID:  copyBigInt(event.OrderID),
+				TransactionHash: event.TransactionHash,
+				BlockNumber:     event.BlockNumber,
+				LogIndex:        event.LogIndex,
+				RolledBackAt:    now,
 			})
 		}
 
 		return h.workOrderEvents.RecordOrderRefunded(ctx, domain.OrderRefundedWorkOrderUpdate{
-			Payer:          event.Payer,
-			Amount:         copyBigInt(event.Amount),
-			OnchainOrderID: copyBigInt(event.OrderID),
-			RecordedAt:     now,
+			Payer:           event.Payer,
+			Amount:          copyBigInt(event.Amount),
+			OnchainOrderID:  copyBigInt(event.OrderID),
+			TransactionHash: event.TransactionHash,
+			BlockNumber:     event.BlockNumber,
+			LogIndex:        event.LogIndex,
+			RecordedAt:      now,
 		})
 	default:
 		return false, fmt.Errorf("unsupported escrow event kind: %s", event.Kind)

@@ -8,27 +8,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/harundarat/rive/backend/internal/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+var (
+	repositoryTestWorkOrderID = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a1f")
+	repositoryTestPayerID     = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a20")
+	repositoryTestPayeeID     = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a21")
+)
+
+type fakeSQLOperation struct {
+	sql  string
+	args []any
+}
+
 type fakeWorkOrderDB struct {
-	sql          string
-	args         []any
-	rowsAffected int64
-	err          error
+	sql           string
+	args          []any
+	rowsAffected  int64
+	err           error
+	target        *workOrderBookkeepingTarget
+	operations    []fakeSQLOperation
+	beginCalls    int
+	commitCalls   int
+	rollbackCalls int
+	accountIDs    map[string]uuid.UUID
 }
 
 func (db *fakeWorkOrderDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	db.sql = sql
-	db.args = args
-	return fakeWorkOrderRow{}
+	db.record(sql, args...)
+	return fakeWorkOrderRow{err: errors.New("unexpected query row scan")}
 }
 
 func (db *fakeWorkOrderDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	db.sql = sql
-	db.args = args
+	db.record(sql, args...)
 	if db.err != nil {
 		return pgconn.CommandTag{}, db.err
 	}
@@ -36,15 +52,154 @@ func (db *fakeWorkOrderDB) Exec(ctx context.Context, sql string, args ...any) (p
 	return pgconn.NewCommandTag("UPDATE " + big.NewInt(db.rowsAffected).String()), nil
 }
 
-type fakeWorkOrderRow struct{}
+func (db *fakeWorkOrderDB) beginTx(ctx context.Context) (workOrderTx, error) {
+	db.beginCalls++
 
-func (fakeWorkOrderRow) Scan(dest ...any) error {
-	return errors.New("unexpected query row scan")
+	return &fakeWorkOrderTx{db: db}, nil
+}
+
+func (db *fakeWorkOrderDB) record(sql string, args ...any) {
+	db.sql = sql
+	db.args = args
+	db.operations = append(db.operations, fakeSQLOperation{sql: sql, args: args})
+}
+
+func (db *fakeWorkOrderDB) operation(t *testing.T, index int) fakeSQLOperation {
+	t.Helper()
+
+	if len(db.operations) <= index {
+		t.Fatalf("expected operation %d to exist, got %d operations", index, len(db.operations))
+	}
+
+	return db.operations[index]
+}
+
+func (db *fakeWorkOrderDB) containsSQL(fragment string) bool {
+	for _, operation := range db.operations {
+		if strings.Contains(operation.sql, fragment) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (db *fakeWorkOrderDB) operationsContaining(fragment string) []fakeSQLOperation {
+	var matches []fakeSQLOperation
+	for _, operation := range db.operations {
+		if strings.Contains(operation.sql, fragment) {
+			matches = append(matches, operation)
+		}
+	}
+
+	return matches
+}
+
+type fakeWorkOrderTx struct {
+	db *fakeWorkOrderDB
+}
+
+func (tx *fakeWorkOrderTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	tx.db.record(sql, args...)
+	if tx.db.err != nil {
+		return fakeWorkOrderRow{err: tx.db.err}
+	}
+
+	switch {
+	case strings.Contains(sql, "UPDATE work_orders"):
+		if tx.db.target == nil {
+			return fakeWorkOrderRow{err: pgx.ErrNoRows}
+		}
+
+		return fakeWorkOrderRow{values: []any{
+			tx.db.target.WorkOrderID,
+			tx.db.target.PayerID,
+			tx.db.target.PayeeID,
+		}}
+	case strings.Contains(sql, "INSERT INTO accounts"):
+		if tx.db.accountIDs == nil {
+			tx.db.accountIDs = map[string]uuid.UUID{}
+		}
+
+		accountID := args[0].(uuid.UUID)
+		key := args[1].(uuid.UUID).String() + ":" + args[2].(string)
+		if existingID, ok := tx.db.accountIDs[key]; ok {
+			accountID = existingID
+		} else {
+			tx.db.accountIDs[key] = accountID
+		}
+
+		return fakeWorkOrderRow{values: []any{accountID}}
+	default:
+		return fakeWorkOrderRow{err: errors.New("unexpected transaction query row scan")}
+	}
+}
+
+func (tx *fakeWorkOrderTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	tx.db.record(sql, args...)
+	if tx.db.err != nil {
+		return pgconn.CommandTag{}, tx.db.err
+	}
+
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+func (tx *fakeWorkOrderTx) Commit(ctx context.Context) error {
+	tx.db.commitCalls++
+
+	return nil
+}
+
+func (tx *fakeWorkOrderTx) Rollback(ctx context.Context) error {
+	tx.db.rollbackCalls++
+
+	return nil
+}
+
+type fakeWorkOrderRow struct {
+	values []any
+	err    error
+}
+
+func (row fakeWorkOrderRow) Scan(dest ...any) error {
+	if row.err != nil {
+		return row.err
+	}
+	if len(dest) != len(row.values) {
+		return errors.New("unexpected scan destination count")
+	}
+
+	for i := range dest {
+		switch value := dest[i].(type) {
+		case *uuid.UUID:
+			*value = row.values[i].(uuid.UUID)
+		default:
+			return errors.New("unsupported scan destination")
+		}
+	}
+
+	return nil
+}
+
+func newEventWorkOrderRepository(db *fakeWorkOrderDB) *WorkOrderRepository {
+	return &WorkOrderRepository{
+		db:      db,
+		beginTx: db.beginTx,
+		newID:   uuid.NewV7,
+	}
+}
+
+func validBookkeepingTarget() *workOrderBookkeepingTarget {
+	return &workOrderBookkeepingTarget{
+		WorkOrderID: repositoryTestWorkOrderID,
+		PayerID:     repositoryTestPayerID,
+		PayeeID:     repositoryTestPayeeID,
+	}
 }
 
 func TestWorkOrderRepositoryRecordOrderCreatedUsesFundedStatusAndPartyPredicates(t *testing.T) {
-	db := &fakeWorkOrderDB{rowsAffected: 1}
-	repo := &WorkOrderRepository{db: db}
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	recordedAt := time.Date(2026, 4, 22, 10, 30, 0, 0, time.UTC)
 
@@ -64,34 +219,36 @@ func TestWorkOrderRepositoryRecordOrderCreatedUsesFundedStatusAndPartyPredicates
 		t.Fatal("expected updated=true")
 	}
 
+	updateOp := db.operation(t, 0)
 	for _, expected := range []string{
 		"status = $1",
 		"onchain_order_id = $3::numeric",
 		"order_tx_hash = $4",
 		"LOWER(payer.wallet_address) = LOWER($8)",
 		"LOWER(payee.wallet_address) = LOWER($9)",
+		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
-		if !strings.Contains(db.sql, expected) {
-			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		if !strings.Contains(updateOp.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, updateOp.sql)
 		}
 	}
 	for _, unexpected := range []string{"funded_at", "::bigint", "funding_tx_hash"} {
-		if strings.Contains(db.sql, unexpected) {
-			t.Fatalf("expected SQL not to contain %q, got %s", unexpected, db.sql)
+		if strings.Contains(updateOp.sql, unexpected) {
+			t.Fatalf("expected SQL not to contain %q, got %s", unexpected, updateOp.sql)
 		}
 	}
 
-	assertArg(t, db.args, 0, string(domain.WorkOrderStatusFunded))
-	assertArg(t, db.args, 1, recordedAt)
-	assertArg(t, db.args, 2, largeOrderID.String())
-	assertArg(t, db.args, 6, string(domain.WorkOrderStatusDraft))
-	assertArg(t, db.args, 7, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
-	assertArg(t, db.args, 8, "0x1111111111111111111111111111111111111111")
+	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 1, recordedAt)
+	assertArg(t, updateOp.args, 2, largeOrderID.String())
+	assertArg(t, updateOp.args, 6, string(domain.WorkOrderStatusDraft))
+	assertArg(t, updateOp.args, 7, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
+	assertArg(t, updateOp.args, 8, "0x1111111111111111111111111111111111111111")
 }
 
 func TestWorkOrderRepositoryRollbackOrderCreatedClearsAtomicFundingFields(t *testing.T) {
-	db := &fakeWorkOrderDB{rowsAffected: 1}
-	repo := &WorkOrderRepository{db: db}
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	rolledBackAt := time.Date(2026, 4, 22, 10, 45, 0, 0, time.UTC)
 
@@ -111,6 +268,7 @@ func TestWorkOrderRepositoryRollbackOrderCreatedClearsAtomicFundingFields(t *tes
 		t.Fatal("expected updated=true")
 	}
 
+	updateOp := db.operation(t, 0)
 	for _, expected := range []string{
 		"status = $1",
 		"onchain_order_id = NULL",
@@ -119,28 +277,29 @@ func TestWorkOrderRepositoryRollbackOrderCreatedClearsAtomicFundingFields(t *tes
 		"work_orders.order_tx_hash = $6",
 		"LOWER(payer.wallet_address) = LOWER($8)",
 		"LOWER(payee.wallet_address) = LOWER($9)",
+		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
-		if !strings.Contains(db.sql, expected) {
-			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		if !strings.Contains(updateOp.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, updateOp.sql)
 		}
 	}
 	for _, unexpected := range []string{"funded_at", "::bigint", "funding_tx_hash"} {
-		if strings.Contains(db.sql, unexpected) {
-			t.Fatalf("expected SQL not to contain %q, got %s", unexpected, db.sql)
+		if strings.Contains(updateOp.sql, unexpected) {
+			t.Fatalf("expected SQL not to contain %q, got %s", unexpected, updateOp.sql)
 		}
 	}
 
-	assertArg(t, db.args, 0, string(domain.WorkOrderStatusDraft))
-	assertArg(t, db.args, 1, rolledBackAt)
-	assertArg(t, db.args, 4, largeOrderID.String())
-	assertArg(t, db.args, 6, string(domain.WorkOrderStatusFunded))
-	assertArg(t, db.args, 7, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
-	assertArg(t, db.args, 8, "0x1111111111111111111111111111111111111111")
+	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusDraft))
+	assertArg(t, updateOp.args, 1, rolledBackAt)
+	assertArg(t, updateOp.args, 4, largeOrderID.String())
+	assertArg(t, updateOp.args, 6, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 7, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
+	assertArg(t, updateOp.args, 8, "0x1111111111111111111111111111111111111111")
 }
 
 func TestWorkOrderRepositoryRecordOrderReleasedSetsCompletedStatusAndPayeePredicate(t *testing.T) {
-	db := &fakeWorkOrderDB{rowsAffected: 1}
-	repo := &WorkOrderRepository{db: db}
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	recordedAt := time.Date(2026, 4, 22, 11, 0, 0, 0, time.UTC)
 
@@ -157,6 +316,7 @@ func TestWorkOrderRepositoryRecordOrderReleasedSetsCompletedStatusAndPayeePredic
 		t.Fatal("expected updated=true")
 	}
 
+	updateOp := db.operation(t, 0)
 	for _, expected := range []string{
 		"status = $1",
 		"completed_at = $2",
@@ -165,23 +325,24 @@ func TestWorkOrderRepositoryRecordOrderReleasedSetsCompletedStatusAndPayeePredic
 		"work_orders.amount = $4::numeric",
 		"payee.id = work_orders.provider_id",
 		"LOWER(payee.wallet_address) = LOWER($6)",
+		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
-		if !strings.Contains(db.sql, expected) {
-			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		if !strings.Contains(updateOp.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, updateOp.sql)
 		}
 	}
 
-	assertArg(t, db.args, 0, string(domain.WorkOrderStatusCompleted))
-	assertArg(t, db.args, 1, recordedAt)
-	assertArg(t, db.args, 2, largeOrderID.String())
-	assertArg(t, db.args, 3, "1000000")
-	assertArg(t, db.args, 4, string(domain.WorkOrderStatusFunded))
-	assertArg(t, db.args, 5, "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934")
+	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusCompleted))
+	assertArg(t, updateOp.args, 1, recordedAt)
+	assertArg(t, updateOp.args, 2, largeOrderID.String())
+	assertArg(t, updateOp.args, 3, "1000000")
+	assertArg(t, updateOp.args, 4, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 5, "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934")
 }
 
 func TestWorkOrderRepositoryRollbackOrderReleasedRestoresFundedStatus(t *testing.T) {
-	db := &fakeWorkOrderDB{rowsAffected: 1}
-	repo := &WorkOrderRepository{db: db}
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	rolledBackAt := time.Date(2026, 4, 22, 11, 5, 0, 0, time.UTC)
 
@@ -198,29 +359,31 @@ func TestWorkOrderRepositoryRollbackOrderReleasedRestoresFundedStatus(t *testing
 		t.Fatal("expected updated=true")
 	}
 
+	updateOp := db.operation(t, 0)
 	for _, expected := range []string{
 		"status = $1",
 		"completed_at = NULL",
 		"updated_at = $2",
 		"work_orders.status = $5",
 		"payee.id = work_orders.provider_id",
+		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
-		if !strings.Contains(db.sql, expected) {
-			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		if !strings.Contains(updateOp.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, updateOp.sql)
 		}
 	}
 
-	assertArg(t, db.args, 0, string(domain.WorkOrderStatusFunded))
-	assertArg(t, db.args, 1, rolledBackAt)
-	assertArg(t, db.args, 2, largeOrderID.String())
-	assertArg(t, db.args, 3, "1000000")
-	assertArg(t, db.args, 4, string(domain.WorkOrderStatusCompleted))
-	assertArg(t, db.args, 5, "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934")
+	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 1, rolledBackAt)
+	assertArg(t, updateOp.args, 2, largeOrderID.String())
+	assertArg(t, updateOp.args, 3, "1000000")
+	assertArg(t, updateOp.args, 4, string(domain.WorkOrderStatusCompleted))
+	assertArg(t, updateOp.args, 5, "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934")
 }
 
 func TestWorkOrderRepositoryRecordOrderRefundedSetsRefundedStatusAndPayerPredicate(t *testing.T) {
-	db := &fakeWorkOrderDB{rowsAffected: 1}
-	repo := &WorkOrderRepository{db: db}
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	recordedAt := time.Date(2026, 4, 22, 11, 10, 0, 0, time.UTC)
 
@@ -237,6 +400,7 @@ func TestWorkOrderRepositoryRecordOrderRefundedSetsRefundedStatusAndPayerPredica
 		t.Fatal("expected updated=true")
 	}
 
+	updateOp := db.operation(t, 0)
 	for _, expected := range []string{
 		"status = $1",
 		"refunded_at = $2",
@@ -245,23 +409,24 @@ func TestWorkOrderRepositoryRecordOrderRefundedSetsRefundedStatusAndPayerPredica
 		"work_orders.amount = $4::numeric",
 		"payer.id = work_orders.creator_id",
 		"LOWER(payer.wallet_address) = LOWER($6)",
+		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
-		if !strings.Contains(db.sql, expected) {
-			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		if !strings.Contains(updateOp.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, updateOp.sql)
 		}
 	}
 
-	assertArg(t, db.args, 0, string(domain.WorkOrderStatusRefunded))
-	assertArg(t, db.args, 1, recordedAt)
-	assertArg(t, db.args, 2, largeOrderID.String())
-	assertArg(t, db.args, 3, "1000000")
-	assertArg(t, db.args, 4, string(domain.WorkOrderStatusFunded))
-	assertArg(t, db.args, 5, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
+	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusRefunded))
+	assertArg(t, updateOp.args, 1, recordedAt)
+	assertArg(t, updateOp.args, 2, largeOrderID.String())
+	assertArg(t, updateOp.args, 3, "1000000")
+	assertArg(t, updateOp.args, 4, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 5, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
 }
 
 func TestWorkOrderRepositoryRollbackOrderRefundedRestoresFundedStatus(t *testing.T) {
-	db := &fakeWorkOrderDB{rowsAffected: 1}
-	repo := &WorkOrderRepository{db: db}
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	rolledBackAt := time.Date(2026, 4, 22, 11, 15, 0, 0, time.UTC)
 
@@ -278,24 +443,26 @@ func TestWorkOrderRepositoryRollbackOrderRefundedRestoresFundedStatus(t *testing
 		t.Fatal("expected updated=true")
 	}
 
+	updateOp := db.operation(t, 0)
 	for _, expected := range []string{
 		"status = $1",
 		"refunded_at = NULL",
 		"updated_at = $2",
 		"work_orders.status = $5",
 		"payer.id = work_orders.creator_id",
+		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
-		if !strings.Contains(db.sql, expected) {
-			t.Fatalf("expected SQL to contain %q, got %s", expected, db.sql)
+		if !strings.Contains(updateOp.sql, expected) {
+			t.Fatalf("expected SQL to contain %q, got %s", expected, updateOp.sql)
 		}
 	}
 
-	assertArg(t, db.args, 0, string(domain.WorkOrderStatusFunded))
-	assertArg(t, db.args, 1, rolledBackAt)
-	assertArg(t, db.args, 2, largeOrderID.String())
-	assertArg(t, db.args, 3, "1000000")
-	assertArg(t, db.args, 4, string(domain.WorkOrderStatusRefunded))
-	assertArg(t, db.args, 5, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
+	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 1, rolledBackAt)
+	assertArg(t, updateOp.args, 2, largeOrderID.String())
+	assertArg(t, updateOp.args, 3, "1000000")
+	assertArg(t, updateOp.args, 4, string(domain.WorkOrderStatusRefunded))
+	assertArg(t, updateOp.args, 5, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
 }
 
 func TestWorkOrderRepositoryFindDeliveryTargetUsesOnchainOrderIDAndPayeeJoin(t *testing.T) {
@@ -360,7 +527,7 @@ func TestWorkOrderRepositorySubmitDeliveryStoresDeliverableCIDWithFundedAndUndel
 
 func TestWorkOrderRepositoryRecordOrderCreatedReturnsFalseWhenPredicateDoesNotMatch(t *testing.T) {
 	db := &fakeWorkOrderDB{rowsAffected: 0}
-	repo := &WorkOrderRepository{db: db}
+	repo := newEventWorkOrderRepository(db)
 
 	updated, err := repo.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
 		SpecHash:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -376,6 +543,219 @@ func TestWorkOrderRepositoryRecordOrderCreatedReturnsFalseWhenPredicateDoesNotMa
 	}
 	if updated {
 		t.Fatal("expected updated=false")
+	}
+	if db.containsSQL("journal_entries") || db.containsSQL("ledger_entries") || db.containsSQL("UPDATE accounts") {
+		t.Fatalf("expected no bookkeeping writes when work order predicate does not match, got %+v", db.operations)
+	}
+	if db.beginCalls != 1 || db.commitCalls != 1 || db.rollbackCalls != 0 {
+		t.Fatalf("expected clean transaction commit for no-op, got begin=%d commit=%d rollback=%d", db.beginCalls, db.commitCalls, db.rollbackCalls)
+	}
+}
+
+func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
+	amount := bigIntFromStringForRepositoryTest("1000000")
+	orderID := bigIntFromStringForRepositoryTest("123")
+	txHash := "0xd31c0da964d78e3647319d57ab9ec84636e715fbb90751b61d46a3040b5d8c70"
+	blockNumber := "0x123"
+	logIndex := "0x4"
+	eventID := txHash + ":" + blockNumber + ":" + logIndex
+	eventTime := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		run             func(*WorkOrderRepository) (bool, error)
+		journalKey      string
+		ledgerTypes     []string
+		balanceDeltas   []string
+		accountNames    []string
+		accountTypes    []string
+		journalContains string
+	}{
+		{
+			name: "order created",
+			run: func(repo *WorkOrderRepository) (bool, error) {
+				return repo.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
+					SpecHash:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					Payer:           "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
+					Payee:           "0x1111111111111111111111111111111111111111",
+					Amount:          amount,
+					OnchainOrderID:  orderID,
+					TransactionHash: txHash,
+					BlockNumber:     blockNumber,
+					LogIndex:        logIndex,
+					RecordedAt:      eventTime,
+				})
+			},
+			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_created:" + eventID,
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"1000000", "1000000"},
+			accountNames:    []string{accountNameEscrowLocked, accountNameEscrowPending},
+			accountTypes:    []string{string(domain.AccountTypeAsset), string(domain.AccountTypeLiability)},
+			journalContains: "Escrow order created",
+		},
+		{
+			name: "order created rollback",
+			run: func(repo *WorkOrderRepository) (bool, error) {
+				return repo.RollbackOrderCreated(context.Background(), domain.OrderCreatedWorkOrderRollback{
+					SpecHash:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					Payer:           "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
+					Payee:           "0x1111111111111111111111111111111111111111",
+					Amount:          amount,
+					OnchainOrderID:  orderID,
+					TransactionHash: txHash,
+					BlockNumber:     blockNumber,
+					LogIndex:        logIndex,
+					RolledBackAt:    eventTime,
+				})
+			},
+			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_created_rollback:" + eventID,
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"-1000000", "-1000000"},
+			accountNames:    []string{accountNameEscrowPending, accountNameEscrowLocked},
+			accountTypes:    []string{string(domain.AccountTypeLiability), string(domain.AccountTypeAsset)},
+			journalContains: "Escrow order created rollback",
+		},
+		{
+			name: "order released",
+			run: func(repo *WorkOrderRepository) (bool, error) {
+				return repo.RecordOrderReleased(context.Background(), domain.OrderReleasedWorkOrderUpdate{
+					Payee:           "0x1111111111111111111111111111111111111111",
+					Amount:          amount,
+					OnchainOrderID:  orderID,
+					TransactionHash: txHash,
+					BlockNumber:     blockNumber,
+					LogIndex:        logIndex,
+					RecordedAt:      eventTime,
+				})
+			},
+			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_released:" + eventID,
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"-1000000", "-1000000"},
+			accountNames:    []string{accountNameEscrowPending, accountNameEscrowLocked},
+			accountTypes:    []string{string(domain.AccountTypeLiability), string(domain.AccountTypeAsset)},
+			journalContains: "Escrow order released",
+		},
+		{
+			name: "order released rollback",
+			run: func(repo *WorkOrderRepository) (bool, error) {
+				return repo.RollbackOrderReleased(context.Background(), domain.OrderReleasedWorkOrderRollback{
+					Payee:           "0x1111111111111111111111111111111111111111",
+					Amount:          amount,
+					OnchainOrderID:  orderID,
+					TransactionHash: txHash,
+					BlockNumber:     blockNumber,
+					LogIndex:        logIndex,
+					RolledBackAt:    eventTime,
+				})
+			},
+			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_released_rollback:" + eventID,
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"1000000", "1000000"},
+			accountNames:    []string{accountNameEscrowLocked, accountNameEscrowPending},
+			accountTypes:    []string{string(domain.AccountTypeAsset), string(domain.AccountTypeLiability)},
+			journalContains: "Escrow order released rollback",
+		},
+		{
+			name: "order refunded",
+			run: func(repo *WorkOrderRepository) (bool, error) {
+				return repo.RecordOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderUpdate{
+					Payer:           "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
+					Amount:          amount,
+					OnchainOrderID:  orderID,
+					TransactionHash: txHash,
+					BlockNumber:     blockNumber,
+					LogIndex:        logIndex,
+					RecordedAt:      eventTime,
+				})
+			},
+			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_refunded:" + eventID,
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"-1000000", "-1000000"},
+			accountNames:    []string{accountNameEscrowPending, accountNameEscrowLocked},
+			accountTypes:    []string{string(domain.AccountTypeLiability), string(domain.AccountTypeAsset)},
+			journalContains: "Escrow order refunded",
+		},
+		{
+			name: "order refunded rollback",
+			run: func(repo *WorkOrderRepository) (bool, error) {
+				return repo.RollbackOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderRollback{
+					Payer:           "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
+					Amount:          amount,
+					OnchainOrderID:  orderID,
+					TransactionHash: txHash,
+					BlockNumber:     blockNumber,
+					LogIndex:        logIndex,
+					RolledBackAt:    eventTime,
+				})
+			},
+			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_refunded_rollback:" + eventID,
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"1000000", "1000000"},
+			accountNames:    []string{accountNameEscrowLocked, accountNameEscrowPending},
+			accountTypes:    []string{string(domain.AccountTypeAsset), string(domain.AccountTypeLiability)},
+			journalContains: "Escrow order refunded rollback",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+			repo := newEventWorkOrderRepository(db)
+
+			updated, err := tt.run(repo)
+			if err != nil {
+				t.Fatalf("event method returned error: %v", err)
+			}
+			if !updated {
+				t.Fatal("expected updated=true")
+			}
+
+			journals := db.operationsContaining("INSERT INTO journal_entries")
+			if len(journals) != 1 {
+				t.Fatalf("expected 1 journal write, got %d", len(journals))
+			}
+			assertArg(t, journals[0].args, 1, tt.journalKey)
+			assertArg(t, journals[0].args, 2, repositoryTestWorkOrderID)
+			if !strings.Contains(journals[0].args[3].(string), tt.journalContains) {
+				t.Fatalf("expected journal description to contain %q, got %q", tt.journalContains, journals[0].args[3])
+			}
+			assertArg(t, journals[0].args, 4, eventTime)
+
+			accountUpserts := db.operationsContaining("INSERT INTO accounts")
+			if len(accountUpserts) != 2 {
+				t.Fatalf("expected 2 account upserts, got %d", len(accountUpserts))
+			}
+			for i := range accountUpserts {
+				if !strings.Contains(accountUpserts[i].sql, "ON CONFLICT (agent_id, name)") {
+					t.Fatalf("expected idempotent account upsert, got %s", accountUpserts[i].sql)
+				}
+				assertArg(t, accountUpserts[i].args, 2, tt.accountNames[i])
+				assertArg(t, accountUpserts[i].args, 3, tt.accountTypes[i])
+				assertArg(t, accountUpserts[i].args, 4, eventTime)
+			}
+
+			ledgers := db.operationsContaining("INSERT INTO ledger_entries")
+			if len(ledgers) != 2 {
+				t.Fatalf("expected 2 ledger writes, got %d", len(ledgers))
+			}
+			for i := range ledgers {
+				assertArg(t, ledgers[i].args, 3, amount.String())
+				assertArg(t, ledgers[i].args, 4, tt.ledgerTypes[i])
+				assertArg(t, ledgers[i].args, 5, eventTime)
+			}
+
+			balanceUpdates := db.operationsContaining("UPDATE accounts")
+			if len(balanceUpdates) != 2 {
+				t.Fatalf("expected 2 account balance updates, got %d", len(balanceUpdates))
+			}
+			for i := range balanceUpdates {
+				assertArg(t, balanceUpdates[i].args, 0, tt.balanceDeltas[i])
+			}
+
+			if db.beginCalls != 1 || db.commitCalls != 1 || db.rollbackCalls != 0 {
+				t.Fatalf("expected committed transaction, got begin=%d commit=%d rollback=%d", db.beginCalls, db.commitCalls, db.rollbackCalls)
+			}
+		})
 	}
 }
 

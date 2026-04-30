@@ -44,6 +44,8 @@ type OrderCreatedWorkOrderUpdate struct {
 	Amount          big.Int
 	OnchainOrderID  big.Int
 	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
 	RecordedAt      time.Time
 }
 
@@ -54,35 +56,49 @@ type OrderCreatedWorkOrderRollback struct {
 	Amount          big.Int
 	OnchainOrderID  big.Int
 	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
 	RolledBackAt    time.Time
 }
 
 type OrderReleasedWorkOrderUpdate struct {
-	Payee          string
-	Amount         big.Int
-	OnchainOrderID big.Int
-	RecordedAt     time.Time
+	Payee           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RecordedAt      time.Time
 }
 
 type OrderReleasedWorkOrderRollback struct {
-	Payee          string
-	Amount         big.Int
-	OnchainOrderID big.Int
-	RolledBackAt   time.Time
+	Payee           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RolledBackAt    time.Time
 }
 
 type OrderRefundedWorkOrderUpdate struct {
-	Payer          string
-	Amount         big.Int
-	OnchainOrderID big.Int
-	RecordedAt     time.Time
+	Payer           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RecordedAt      time.Time
 }
 
 type OrderRefundedWorkOrderRollback struct {
-	Payer          string
-	Amount         big.Int
-	OnchainOrderID big.Int
-	RolledBackAt   time.Time
+	Payer           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RolledBackAt    time.Time
 }
 
 type WorkOrderDeliveryTarget struct {
