@@ -60,6 +60,39 @@ func (r *WorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idempote
 	return workOrder, nil
 }
 
+func (r *WorkOrderRepository) FindByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrder, error) {
+	workOrder, err := scanWorkOrder(r.db.QueryRow(ctx, `
+		SELECT
+			id,
+			idempotency_key,
+			creator_id,
+			provider_id,
+			amount::text,
+			status,
+			spec_hash,
+			spec_version,
+			spec_tx_hash,
+			deliverable_cid,
+			delivered_at,
+			completed_at,
+			refunded_at,
+			onchain_order_id::text,
+			order_tx_hash,
+			created_at,
+			updated_at
+		FROM work_orders
+		WHERE onchain_order_id = $1::numeric
+	`, onchainOrderID.String()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find work order by onchain order id: %w", err)
+	}
+
+	return workOrder, nil
+}
+
 func (r *WorkOrderRepository) FindDeliveryTargetByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrderDeliveryTarget, error) {
 	var payee string
 	workOrder, err := scanWorkOrderWithExtra(r.db.QueryRow(ctx, `

@@ -55,7 +55,10 @@ func (s *fakeZGStorage) UploadBytes(ctx context.Context, data []byte) (*domain.Z
 
 type fakeWorkOrderRepository struct {
 	byIdempotencyKey       map[string]domain.WorkOrder
+	byOnchainOrderID       map[string]domain.WorkOrder
 	findErr                error
+	findOnchainErr         error
+	findOnchainCalls       int
 	createErr              error
 	recordErr              error
 	rollbackErr            error
@@ -101,6 +104,25 @@ func (r *fakeWorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idem
 	if r.byIdempotencyKey != nil {
 		if workOrder, ok := r.byIdempotencyKey[idempotencyKey]; ok {
 			copy := workOrder
+			return &copy, nil
+		}
+	}
+
+	return nil, domain.ErrNotFound
+}
+
+func (r *fakeWorkOrderRepository) FindByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrder, error) {
+	r.findOnchainCalls++
+	if r.findOnchainErr != nil {
+		return nil, r.findOnchainErr
+	}
+	if r.byOnchainOrderID != nil {
+		if workOrder, ok := r.byOnchainOrderID[onchainOrderID.String()]; ok {
+			copy := workOrder
+			copy.Amount = *new(big.Int).Set(&workOrder.Amount)
+			if workOrder.OnchainOrderID != nil {
+				copy.OnchainOrderID = new(big.Int).Set(workOrder.OnchainOrderID)
+			}
 			return &copy, nil
 		}
 	}
@@ -914,6 +936,104 @@ func TestWorkOrderUsecaseSubmitDeliveryClassifiesUpdateRaceAsConflict(t *testing
 	}
 	if workOrders.deliveryFindCalls != 2 {
 		t.Fatalf("expected delivery target to be fetched twice, got %d", workOrders.deliveryFindCalls)
+	}
+}
+
+func TestWorkOrderUsecaseGetByOnchainOrderIDSuccess(t *testing.T) {
+	orderID := bigIntFromString("123")
+	deliverable := testRootHash
+	deliveredAt := fixedTime
+	stored := domain.WorkOrder{
+		ID:             fixedWorkOrderID,
+		IdempotencyKey: "wo-request-1",
+		CreatorID:      fixedPayerID,
+		ProviderID:     fixedPayeeID,
+		Amount:         bigIntFromString("1000000"),
+		Status:         domain.WorkOrderStatusFunded,
+		SpecHash:       testRootHash,
+		SpecVersion:    "1.0",
+		SpecTxHash:     testTxHash,
+		DeliverableCID: &deliverable,
+		DeliveredAt:    &deliveredAt,
+		OnchainOrderID: &orderID,
+		CreatedAt:      fixedTime,
+		UpdatedAt:      fixedTime,
+	}
+	workOrders := &fakeWorkOrderRepository{
+		byOnchainOrderID: map[string]domain.WorkOrder{"123": stored},
+	}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	output, err := uc.GetByOnchainOrderID(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("GetByOnchainOrderID returned error: %v", err)
+	}
+	if output.ID != fixedWorkOrderID {
+		t.Fatalf("expected work order id %s, got %s", fixedWorkOrderID, output.ID)
+	}
+	if output.Status != domain.WorkOrderStatusFunded {
+		t.Fatalf("expected status funded, got %q", output.Status)
+	}
+	if output.DeliverableCID == nil || *output.DeliverableCID != testRootHash {
+		t.Fatalf("expected deliverable cid %q, got %v", testRootHash, output.DeliverableCID)
+	}
+	if workOrders.findOnchainCalls != 1 {
+		t.Fatalf("expected 1 find call, got %d", workOrders.findOnchainCalls)
+	}
+}
+
+func TestWorkOrderUsecaseGetByOnchainOrderIDValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{name: "empty", id: ""},
+		{name: "non-numeric", id: "abc"},
+		{name: "zero", id: "0"},
+		{name: "negative", id: "-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workOrders := &fakeWorkOrderRepository{}
+			uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+			_, err := uc.GetByOnchainOrderID(context.Background(), tt.id)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			var validationErr *domain.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected ValidationError, got %T", err)
+			}
+			if workOrders.findOnchainCalls != 0 {
+				t.Fatalf("expected no repo call on validation failure, got %d", workOrders.findOnchainCalls)
+			}
+		})
+	}
+}
+
+func TestWorkOrderUsecaseGetByOnchainOrderIDReturnsNotFound(t *testing.T) {
+	workOrders := &fakeWorkOrderRepository{}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	_, err := uc.GetByOnchainOrderID(context.Background(), "999")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestWorkOrderUsecaseGetByOnchainOrderIDReturnsPersistenceError(t *testing.T) {
+	expectedErr := errors.New("database unavailable")
+	workOrders := &fakeWorkOrderRepository{findOnchainErr: expectedErr}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	_, err := uc.GetByOnchainOrderID(context.Background(), "123")
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected original error, got %v", err)
+	}
+	if !errors.Is(err, domain.ErrPersistence) {
+		t.Fatalf("expected domain persistence error, got %v", err)
 	}
 }
 

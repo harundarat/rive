@@ -82,6 +82,7 @@ type WorkOrderDeliveryResponse struct {
 type WorkOrderUsecase interface {
 	UploadSpec(ctx context.Context, request WorkOrderSpecRequest) (*WorkOrderSpecResponse, error)
 	SubmitDelivery(ctx context.Context, onchainOrderID string, request WorkOrderDeliveryRequest) (*WorkOrderDeliveryResponse, error)
+	GetByOnchainOrderID(ctx context.Context, onchainOrderID string) (*WorkOrder, error)
 }
 
 type ValidationError struct {

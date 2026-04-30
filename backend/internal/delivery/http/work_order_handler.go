@@ -55,6 +55,30 @@ func (h *WorkOrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 	response.Success(w, http.StatusCreated, output)
 }
 
+func (h *WorkOrderHandler) Get(w http.ResponseWriter, r *http.Request) {
+	output, err := h.workOrderUsecase.GetByOnchainOrderID(r.Context(), chi.URLParam(r, "onchainOrderID"))
+	if err != nil {
+		var validationErr *domain.ValidationError
+		if errors.As(err, &validationErr) {
+			response.Error(w, apierror.New(http.StatusBadRequest, "BAD_REQUEST", validationErr.Error()))
+			return
+		}
+		if errors.Is(err, domain.ErrNotFound) {
+			response.Error(w, apierror.New(http.StatusNotFound, "WORK_ORDER_NOT_FOUND", "work order not found"))
+			return
+		}
+		if errors.Is(err, domain.ErrPersistence) {
+			response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_FETCH_WORK_ORDER", err.Error()))
+			return
+		}
+
+		response.Error(w, apierror.New(http.StatusInternalServerError, "INTERNAL_ERROR", err.Error()))
+		return
+	}
+
+	response.Success(w, http.StatusOK, output)
+}
+
 func (h *WorkOrderHandler) SubmitDelivery(w http.ResponseWriter, r *http.Request) {
 	var request domain.WorkOrderDeliveryRequest
 	decoder := json.NewDecoder(r.Body)

@@ -177,6 +177,23 @@ func (uc *WorkOrderUsecase) SubmitDelivery(ctx context.Context, onchainOrderID s
 	}, nil
 }
 
+func (uc *WorkOrderUsecase) GetByOnchainOrderID(ctx context.Context, onchainOrderID string) (*domain.WorkOrder, error) {
+	orderID, _, err := parseOnchainOrderID(onchainOrderID)
+	if err != nil {
+		return nil, err
+	}
+
+	workOrder, err := uc.workOrderRepository.FindByOnchainOrderID(ctx, orderID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: find work order: %w", domain.ErrPersistence, err)
+	}
+
+	return workOrder, nil
+}
+
 func (uc *WorkOrderUsecase) RecordOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (bool, error) {
 	event.RecordedAt = event.RecordedAt.UTC()
 

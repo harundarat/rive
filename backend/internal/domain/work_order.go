@@ -98,6 +98,7 @@ type WorkOrderDeliveryUpdate struct {
 
 type WorkOrderRepository interface {
 	FindByIdempotencyKey(ctx context.Context, idempotencyKey string) (*WorkOrder, error)
+	FindByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*WorkOrder, error)
 	FindDeliveryTargetByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*WorkOrderDeliveryTarget, error)
 	Create(ctx context.Context, workOrder WorkOrder) error
 	SubmitDelivery(ctx context.Context, update WorkOrderDeliveryUpdate) (bool, error)
