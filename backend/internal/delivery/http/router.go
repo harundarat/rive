@@ -2,13 +2,20 @@ package http
 
 import "github.com/go-chi/chi/v5"
 
-func NewRouter(healthHandler *HealthHandler, workOrderHandler *WorkOrderHandler, quickNodeWebhookHandler *QuickNodeWebhookHandler, storageHandler *StorageHandler) *chi.Mux {
+func NewRouter(
+	healthHandler *HealthHandler,
+	workOrderHandler *WorkOrderHandler,
+	quickNodeWebhookHandler *QuickNodeWebhookHandler,
+	storageHandler *StorageHandler,
+	ledgerHandler *LedgerHandler,
+) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/work-orders", workOrderHandler.Create)
 		r.Get("/work-orders/{onchainOrderID}", workOrderHandler.Get)
 		r.Post("/work-orders/{onchainOrderID}/delivery", workOrderHandler.SubmitDelivery)
+		r.Get("/ledger/{walletAddress}/pnl", ledgerHandler.GetPnL)
 		r.Post("/storage/upload", storageHandler.Upload)
 		r.Post("/webhooks/quicknode/escrow-events", quickNodeWebhookHandler.HandleEscrowEvents)
 

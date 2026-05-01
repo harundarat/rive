@@ -38,14 +38,17 @@ func Initialize() (*App, error) {
 	// Repository Layer
 	agentRepository := postgresrepo.NewAgentRepository(pgDB)
 	workOrderRepository := postgresrepo.NewWorkOrderRepository(pgDB)
+	pnlRepository := postgresrepo.NewPnLRepository(pgDB)
 
 	// Usecase Layer
 	healthUsecase := usecase.NewHealthUsecase(zgClient)
 	workOrderUsecase := usecase.NewWorkOrderUsecase(zgClient, workOrderRepository, agentRepository)
+	pnlUsecase := usecase.NewPnLUsecase(pnlRepository)
 
 	// Handler Layer
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
 	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
+	ledgerHandler := deliveryhttp.NewLedgerHandler(pnlUsecase)
 	storageHandler := deliveryhttp.NewStorageHandler(zgClient)
 	quickNodeWebhookHandler := deliveryhttp.NewQuickNodeWebhookHandler(
 		cfg.QuickNodeWebhookSecret,
@@ -54,7 +57,7 @@ func Initialize() (*App, error) {
 	)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler)
+	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler, ledgerHandler)
 
 	log.Println("Starting application...")
 

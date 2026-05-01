@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	accountNameEscrowLocked  = "escrow_locked"
-	accountNameEscrowPending = "escrow_pending"
+	accountNameEscrowLocked   = "escrow_locked"
+	accountNameEscrowPending  = "escrow_pending"
+	accountNameServiceExpense = "Service Expense"
+	accountNameServiceRevenue = "Service Revenue"
 )
 
 type workOrderExecutor interface {
@@ -267,13 +269,13 @@ func (r *WorkOrderRepository) RecordOrderCreated(ctx context.Context, event doma
 			return false, err
 		}
 
-		err = r.recordEscrowBookkeeping(ctx, tx, escrowBookkeepingEntry{
+		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
 			WorkOrderID:    target.WorkOrderID,
 			CreatedAt:      event.RecordedAt,
 			Amount:         event.Amount,
 			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_created", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
 			Description:    fmt.Sprintf("Escrow order created for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []escrowLedgerPosting{
+			Postings: []ledgerPosting{
 				{
 					AgentID:     target.PayerID,
 					AccountName: accountNameEscrowLocked,
@@ -339,13 +341,13 @@ func (r *WorkOrderRepository) RollbackOrderCreated(ctx context.Context, event do
 			return false, err
 		}
 
-		err = r.recordEscrowBookkeeping(ctx, tx, escrowBookkeepingEntry{
+		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
 			WorkOrderID:    target.WorkOrderID,
 			CreatedAt:      event.RolledBackAt,
 			Amount:         event.Amount,
 			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_created_rollback", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
 			Description:    fmt.Sprintf("Escrow order created rollback for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []escrowLedgerPosting{
+			Postings: []ledgerPosting{
 				{
 					AgentID:     target.PayeeID,
 					AccountName: accountNameEscrowPending,
@@ -403,13 +405,13 @@ func (r *WorkOrderRepository) RecordOrderReleased(ctx context.Context, event dom
 			return false, err
 		}
 
-		err = r.recordEscrowBookkeeping(ctx, tx, escrowBookkeepingEntry{
+		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
 			WorkOrderID:    target.WorkOrderID,
 			CreatedAt:      event.RecordedAt,
 			Amount:         event.Amount,
 			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_released", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
 			Description:    fmt.Sprintf("Escrow order released for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []escrowLedgerPosting{
+			Postings: []ledgerPosting{
 				{
 					AgentID:     target.PayeeID,
 					AccountName: accountNameEscrowPending,
@@ -420,6 +422,18 @@ func (r *WorkOrderRepository) RecordOrderReleased(ctx context.Context, event dom
 					AgentID:     target.PayerID,
 					AccountName: accountNameEscrowLocked,
 					AccountType: domain.AccountTypeAsset,
+					EntryType:   domain.LedgerEntryTypeCredit,
+				},
+				{
+					AgentID:     target.PayerID,
+					AccountName: accountNameServiceExpense,
+					AccountType: domain.AccountTypeExpense,
+					EntryType:   domain.LedgerEntryTypeDebit,
+				},
+				{
+					AgentID:     target.PayeeID,
+					AccountName: accountNameServiceRevenue,
+					AccountType: domain.AccountTypeRevenue,
 					EntryType:   domain.LedgerEntryTypeCredit,
 				},
 			},
@@ -467,13 +481,13 @@ func (r *WorkOrderRepository) RollbackOrderReleased(ctx context.Context, event d
 			return false, err
 		}
 
-		err = r.recordEscrowBookkeeping(ctx, tx, escrowBookkeepingEntry{
+		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
 			WorkOrderID:    target.WorkOrderID,
 			CreatedAt:      event.RolledBackAt,
 			Amount:         event.Amount,
 			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_released_rollback", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
 			Description:    fmt.Sprintf("Escrow order released rollback for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []escrowLedgerPosting{
+			Postings: []ledgerPosting{
 				{
 					AgentID:     target.PayerID,
 					AccountName: accountNameEscrowLocked,
@@ -484,6 +498,18 @@ func (r *WorkOrderRepository) RollbackOrderReleased(ctx context.Context, event d
 					AgentID:     target.PayeeID,
 					AccountName: accountNameEscrowPending,
 					AccountType: domain.AccountTypeLiability,
+					EntryType:   domain.LedgerEntryTypeCredit,
+				},
+				{
+					AgentID:     target.PayeeID,
+					AccountName: accountNameServiceRevenue,
+					AccountType: domain.AccountTypeRevenue,
+					EntryType:   domain.LedgerEntryTypeDebit,
+				},
+				{
+					AgentID:     target.PayerID,
+					AccountName: accountNameServiceExpense,
+					AccountType: domain.AccountTypeExpense,
 					EntryType:   domain.LedgerEntryTypeCredit,
 				},
 			},
@@ -531,13 +557,13 @@ func (r *WorkOrderRepository) RecordOrderRefunded(ctx context.Context, event dom
 			return false, err
 		}
 
-		err = r.recordEscrowBookkeeping(ctx, tx, escrowBookkeepingEntry{
+		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
 			WorkOrderID:    target.WorkOrderID,
 			CreatedAt:      event.RecordedAt,
 			Amount:         event.Amount,
 			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_refunded", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
 			Description:    fmt.Sprintf("Escrow order refunded for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []escrowLedgerPosting{
+			Postings: []ledgerPosting{
 				{
 					AgentID:     target.PayeeID,
 					AccountName: accountNameEscrowPending,
@@ -595,13 +621,13 @@ func (r *WorkOrderRepository) RollbackOrderRefunded(ctx context.Context, event d
 			return false, err
 		}
 
-		err = r.recordEscrowBookkeeping(ctx, tx, escrowBookkeepingEntry{
+		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
 			WorkOrderID:    target.WorkOrderID,
 			CreatedAt:      event.RolledBackAt,
 			Amount:         event.Amount,
 			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_refunded_rollback", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
 			Description:    fmt.Sprintf("Escrow order refunded rollback for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []escrowLedgerPosting{
+			Postings: []ledgerPosting{
 				{
 					AgentID:     target.PayerID,
 					AccountName: accountNameEscrowLocked,
@@ -635,16 +661,16 @@ type workOrderBookkeepingTarget struct {
 	PayeeID     uuid.UUID
 }
 
-type escrowBookkeepingEntry struct {
+type bookkeepingEntry struct {
 	WorkOrderID    uuid.UUID
 	IdempotencyKey string
 	Description    string
 	CreatedAt      time.Time
 	Amount         big.Int
-	Postings       []escrowLedgerPosting
+	Postings       []ledgerPosting
 }
 
-type escrowLedgerPosting struct {
+type ledgerPosting struct {
 	AgentID     uuid.UUID
 	AccountName string
 	AccountType domain.AccountType
@@ -681,7 +707,7 @@ func (r *WorkOrderRepository) begin(ctx context.Context) (workOrderTx, error) {
 	return nil, errors.New("transaction support is not configured")
 }
 
-func (r *WorkOrderRepository) recordEscrowBookkeeping(ctx context.Context, tx workOrderTx, entry escrowBookkeepingEntry) error {
+func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrderTx, entry bookkeepingEntry) error {
 	journalID, err := r.nextID()
 	if err != nil {
 		return fmt.Errorf("generate journal entry id: %w", err)
@@ -722,7 +748,7 @@ func (r *WorkOrderRepository) recordEscrowBookkeeping(ctx context.Context, tx wo
 	return nil
 }
 
-func (r *WorkOrderRepository) findOrCreateAccount(ctx context.Context, tx workOrderTx, posting escrowLedgerPosting, createdAt time.Time) (uuid.UUID, error) {
+func (r *WorkOrderRepository) findOrCreateAccount(ctx context.Context, tx workOrderTx, posting ledgerPosting, createdAt time.Time) (uuid.UUID, error) {
 	accountID, err := r.nextID()
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("generate account id: %w", err)
@@ -759,7 +785,7 @@ func (r *WorkOrderRepository) recordLedgerPosting(
 	tx workOrderTx,
 	accountID uuid.UUID,
 	journalID uuid.UUID,
-	posting escrowLedgerPosting,
+	posting ledgerPosting,
 	amount big.Int,
 	createdAt time.Time,
 ) error {

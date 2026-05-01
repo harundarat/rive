@@ -629,10 +629,10 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 				})
 			},
 			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_released:" + eventID,
-			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
-			balanceDeltas:   []string{"-1000000", "-1000000"},
-			accountNames:    []string{accountNameEscrowPending, accountNameEscrowLocked},
-			accountTypes:    []string{string(domain.AccountTypeLiability), string(domain.AccountTypeAsset)},
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit), string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"-1000000", "-1000000", "1000000", "1000000"},
+			accountNames:    []string{accountNameEscrowPending, accountNameEscrowLocked, accountNameServiceExpense, accountNameServiceRevenue},
+			accountTypes:    []string{string(domain.AccountTypeLiability), string(domain.AccountTypeAsset), string(domain.AccountTypeExpense), string(domain.AccountTypeRevenue)},
 			journalContains: "Escrow order released",
 		},
 		{
@@ -649,10 +649,10 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 				})
 			},
 			journalKey:      "work_order:" + repositoryTestWorkOrderID.String() + ":order_released_rollback:" + eventID,
-			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
-			balanceDeltas:   []string{"1000000", "1000000"},
-			accountNames:    []string{accountNameEscrowLocked, accountNameEscrowPending},
-			accountTypes:    []string{string(domain.AccountTypeAsset), string(domain.AccountTypeLiability)},
+			ledgerTypes:     []string{string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit), string(domain.LedgerEntryTypeDebit), string(domain.LedgerEntryTypeCredit)},
+			balanceDeltas:   []string{"1000000", "1000000", "-1000000", "-1000000"},
+			accountNames:    []string{accountNameEscrowLocked, accountNameEscrowPending, accountNameServiceRevenue, accountNameServiceExpense},
+			accountTypes:    []string{string(domain.AccountTypeAsset), string(domain.AccountTypeLiability), string(domain.AccountTypeRevenue), string(domain.AccountTypeExpense)},
 			journalContains: "Escrow order released rollback",
 		},
 		{
@@ -722,8 +722,8 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 			assertArg(t, journals[0].args, 4, eventTime)
 
 			accountUpserts := db.operationsContaining("INSERT INTO accounts")
-			if len(accountUpserts) != 2 {
-				t.Fatalf("expected 2 account upserts, got %d", len(accountUpserts))
+			if len(accountUpserts) != len(tt.accountNames) {
+				t.Fatalf("expected %d account upserts, got %d", len(tt.accountNames), len(accountUpserts))
 			}
 			for i := range accountUpserts {
 				if !strings.Contains(accountUpserts[i].sql, "ON CONFLICT (agent_id, name)") {
@@ -735,8 +735,8 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 			}
 
 			ledgers := db.operationsContaining("INSERT INTO ledger_entries")
-			if len(ledgers) != 2 {
-				t.Fatalf("expected 2 ledger writes, got %d", len(ledgers))
+			if len(ledgers) != len(tt.ledgerTypes) {
+				t.Fatalf("expected %d ledger writes, got %d", len(tt.ledgerTypes), len(ledgers))
 			}
 			for i := range ledgers {
 				assertArg(t, ledgers[i].args, 3, amount.String())
@@ -745,8 +745,8 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 			}
 
 			balanceUpdates := db.operationsContaining("UPDATE accounts")
-			if len(balanceUpdates) != 2 {
-				t.Fatalf("expected 2 account balance updates, got %d", len(balanceUpdates))
+			if len(balanceUpdates) != len(tt.balanceDeltas) {
+				t.Fatalf("expected %d account balance updates, got %d", len(tt.balanceDeltas), len(balanceUpdates))
 			}
 			for i := range balanceUpdates {
 				assertArg(t, balanceUpdates[i].args, 0, tt.balanceDeltas[i])
