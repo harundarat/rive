@@ -112,6 +112,20 @@ FOUNDRY_PROFILE=0g_mainnet forge verify-contract \
   src/Escrow.sol:Escrow
 ```
 
+Verify `NettingSettlement`:
+
+```shell
+FOUNDRY_PROFILE=0g_mainnet forge verify-contract \
+  --chain-id 16661 \
+  --verifier custom \
+  --verifier-api-key "${ETHERSCAN_API_KEY:-PLACEHOLDER}" \
+  --verifier-url "https://chainscan.0g.ai/open/api" \
+  --compiler-version "v0.8.33+commit.64118f21" \
+  --constructor-args $(cast abi-encode "constructor(address,address)" <RIVE_USD_ADDRESS> <NETTING_SETTLER_ADDRESS>) \
+  <NETTING_SETTLEMENT_ADDRESS> \
+  src/NettingSettlement.sol:NettingSettlement
+```
+
 ### Cast
 
 ```shell

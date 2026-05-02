@@ -14,6 +14,15 @@
       "constructorArgs": {
         "token": "0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0"
       }
+    },
+    "NettingSettlement": {
+      "address": "0x59Ecf1AD6e755CBE71aac6DfAf1b2Dba9E148b98",
+      "deployBlock": 32139250,
+      "deployTxHash": "0x5272571b3334b37b5b349497cd12f8bbd0b69fdec1ecabbf158f0be5689de89e",
+      "constructorArgs": {
+        "token": "0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0",
+        "nettingSettler": "0x26Dea28e89DFdF4Cd5ab9f63010Bb46316Ec3a73"
+      }
     }
   }
 }
