@@ -51,12 +51,26 @@ $ anvil
 $ FOUNDRY_PROFILE=0g_mainnet forge script script/Deploy.s.sol:DeployScript --broadcast
 ```
 
+Deploy only `Escrow` with an existing ERC20 token:
+
+```shell
+$ FOUNDRY_PROFILE=0g_mainnet forge script script/DeployEscrow.s.sol:DeployEscrowScript --broadcast
+```
+
+Deploy only `NettingSettlement` with an existing ERC20 token:
+
+```shell
+$ FOUNDRY_PROFILE=0g_mainnet forge script script/DeployNettingSettlement.s.sol:DeployNettingSettlementScript --broadcast
+```
+
 For 0G mainnet, make sure `.env` contains:
 
 ```shell
 PRIVATE_KEY=0x...
 ETH_GAS_PRICE=3000000000
 ETH_PRIORITY_GAS_PRICE=2000000001
+TOKEN_ADDRESS=0x...
+NETTING_SETTLER_ADDRESS=0x...
 ```
 
 ### Verify on 0G Chain Scan
