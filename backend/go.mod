@@ -12,6 +12,7 @@ require (
 	github.com/openweb3/web3go v0.2.9
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.21.0
+	go.yaml.in/yaml/v3 v3.0.4
 )
 
 require (
@@ -112,7 +113,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.40.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.35.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/sync v0.19.0 // indirect
