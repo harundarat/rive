@@ -4,12 +4,12 @@ pragma solidity 0.8.33;
 import {Test} from "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
 import {Escrow} from "../src/Escrow.sol";
+import {RiveUSD} from "../src/mocks/RiveUSD.sol";
 
 contract EscrowTest is Test {
-    ERC20Mock internal token;
+    RiveUSD internal token;
     Escrow internal escrow;
 
     address internal payer;
@@ -29,7 +29,6 @@ contract EscrowTest is Test {
         uint256 amount,
         bytes32 specHash
     );
-    event OrderFunded(uint256 indexed orderID, address indexed payer, uint256 amount);
     event OrderReleased(uint256 indexed orderID, address indexed payee, uint256 amount);
     event OrderRefunded(uint256 indexed orderID, address indexed payer, uint256 amount);
 
@@ -39,7 +38,7 @@ contract EscrowTest is Test {
         keeper = makeAddr("keeper");
         attacker = makeAddr("attacker");
 
-        token = new ERC20Mock();
+        token = new RiveUSD();
         escrow = new Escrow(IERC20(address(token)));
 
         token.mint(payer, INITIAL_BALANCE);
@@ -58,22 +57,46 @@ contract EscrowTest is Test {
         assertEq(escrow.nextOrderID(), 0);
     }
 
+    function test_RiveUSD_Metadata() public view {
+        assertEq(token.name(), "Rive USD");
+        assertEq(token.symbol(), "rUSD");
+        assertEq(token.decimals(), 18);
+    }
+
+    function test_RiveUSD_PublicMint() public {
+        address minter = makeAddr("minter");
+        address recipient = makeAddr("recipient");
+        uint256 amount = 123e18;
+
+        vm.prank(minter);
+        token.mint(recipient, amount);
+
+        assertEq(token.balanceOf(recipient), amount);
+    }
+
     function test_Constructor_RevertsForZeroTokenAddress() public {
         vm.expectRevert(Escrow.ZeroAddress.selector);
         new Escrow(IERC20(address(0)));
     }
 
-    function test_CreateOrder_StoresFieldsAndEmits() public {
+    function test_CreateOrder_TransfersFundsStoresFieldsAndEmits() public {
+        uint256 payerBalanceBefore = token.balanceOf(payer);
+        uint256 escrowBalanceBefore = token.balanceOf(address(escrow));
+
+        vm.warp(1_700_000_000);
+
         vm.expectEmit(true, true, true, true, address(escrow));
         emit OrderCreated(0, payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
         uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
         assertEq(orderID, 0);
         assertEq(escrow.nextOrderID(), 1);
+        assertEq(token.balanceOf(payer), payerBalanceBefore - DEFAULT_AMOUNT);
+        assertEq(token.balanceOf(address(escrow)), escrowBalanceBefore + DEFAULT_AMOUNT);
 
         (
             address orderPayer,
-            uint64 fundedAt,
+            uint64 createdAt,
             Escrow.OrderState state,
             address orderPayee,
             uint256 amount,
@@ -81,7 +104,7 @@ contract EscrowTest is Test {
         ) = _getOrder(orderID);
 
         assertEq(orderPayer, payer);
-        assertEq(fundedAt, 0);
+        assertEq(createdAt, 1_700_000_000);
         assertEq(uint8(state), uint8(Escrow.OrderState.Created));
         assertEq(orderPayee, payee);
         assertEq(amount, DEFAULT_AMOUNT);
@@ -109,16 +132,38 @@ contract EscrowTest is Test {
         escrow.createOrder(payee, 0, DEFAULT_SPEC_HASH);
     }
 
-    function testFuzz_CreateOrder_StoresArbitraryValidInput(address fuzzPayee, uint256 amount, bytes32 specHash)
-        public
-    {
+    function test_CreateOrder_RevertsWithoutAllowance() public {
+        vm.prank(payer);
+        token.approve(address(escrow), 0);
+
+        vm.prank(payer);
+        vm.expectRevert();
+        escrow.createOrder(payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+    }
+
+    function test_CreateOrder_RevertsWithoutBalance() public {
+        uint256 amount = INITIAL_BALANCE + 1;
+
+        vm.prank(payer);
+        vm.expectRevert();
+        escrow.createOrder(payee, amount, DEFAULT_SPEC_HASH);
+    }
+
+    function testFuzz_CreateOrder_StoresArbitraryValidInput(
+        address fuzzPayee,
+        uint96 rawAmount,
+        bytes32 specHash
+    ) public {
         vm.assume(fuzzPayee != address(0));
-        vm.assume(amount > 0);
+        uint256 amount = bound(uint256(rawAmount), 1, INITIAL_BALANCE);
+
+        uint256 payerBalanceBefore = token.balanceOf(payer);
+        uint256 escrowBalanceBefore = token.balanceOf(address(escrow));
 
         uint256 orderID = _createOrder(payer, fuzzPayee, amount, specHash);
         (
             address orderPayer,
-            uint64 fundedAt,
+            uint64 createdAt,
             Escrow.OrderState state,
             address orderPayee,
             uint256 storedAmount,
@@ -126,104 +171,17 @@ contract EscrowTest is Test {
         ) = _getOrder(orderID);
 
         assertEq(orderPayer, payer);
-        assertEq(fundedAt, 0);
+        assertEq(createdAt, uint64(block.timestamp));
         assertEq(uint8(state), uint8(Escrow.OrderState.Created));
         assertEq(orderPayee, fuzzPayee);
         assertEq(storedAmount, amount);
         assertEq(storedSpecHash, specHash);
-    }
-
-    function test_FundOrder_TransfersFundsSetsStateTimestampAndEmits() public {
-        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-
-        uint256 payerBalanceBefore = token.balanceOf(payer);
-        uint256 escrowBalanceBefore = token.balanceOf(address(escrow));
-
-        vm.warp(1_700_000_000);
-
-        vm.expectEmit(true, true, false, true, address(escrow));
-        emit OrderFunded(orderID, payer, DEFAULT_AMOUNT);
-
-        _fundOrder(payer, orderID);
-
-        assertEq(token.balanceOf(payer), payerBalanceBefore - DEFAULT_AMOUNT);
-        assertEq(token.balanceOf(address(escrow)), escrowBalanceBefore + DEFAULT_AMOUNT);
-
-        (
-            address orderPayer,
-            uint64 fundedAt,
-            Escrow.OrderState state,
-            address orderPayee,
-            uint256 amount,
-            bytes32 specHash
-        ) = _getOrder(orderID);
-
-        assertEq(orderPayer, payer);
-        assertEq(fundedAt, 1_700_000_000);
-        assertEq(uint8(state), uint8(Escrow.OrderState.Funded));
-        assertEq(orderPayee, payee);
-        assertEq(amount, DEFAULT_AMOUNT);
-        assertEq(specHash, DEFAULT_SPEC_HASH);
-    }
-
-    function test_FundOrder_RevertsForNonPayer() public {
-        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-
-        vm.prank(attacker);
-        vm.expectRevert(Escrow.NotPayer.selector);
-        escrow.fundOrder(orderID);
-    }
-
-    function test_FundOrder_RevertsForNonCreatedState() public {
-        vm.prank(payer);
-        vm.expectRevert(abi.encodeWithSelector(Escrow.InvalidState.selector, Escrow.OrderState.None));
-        escrow.fundOrder(999);
-    }
-
-    function test_FundOrder_RevertsWhenAlreadyFunded() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-
-        vm.prank(payer);
-        vm.expectRevert(abi.encodeWithSelector(Escrow.InvalidState.selector, Escrow.OrderState.Funded));
-        escrow.fundOrder(orderID);
-    }
-
-    function test_FundOrder_RevertsWithoutAllowance() public {
-        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-
-        vm.prank(payer);
-        token.approve(address(escrow), 0);
-
-        vm.prank(payer);
-        vm.expectRevert();
-        escrow.fundOrder(orderID);
-    }
-
-    function test_FundOrder_RevertsWithoutBalance() public {
-        uint256 amount = INITIAL_BALANCE + 1;
-        uint256 orderID = _createOrder(payer, payee, amount, DEFAULT_SPEC_HASH);
-
-        vm.prank(payer);
-        vm.expectRevert();
-        escrow.fundOrder(orderID);
-    }
-
-    function testFuzz_FundOrder_TransfersExactAmount(uint96 rawAmount) public {
-        uint256 amount = bound(uint256(rawAmount), 1, INITIAL_BALANCE);
-        uint256 orderID = _createOrder(payer, payee, amount, DEFAULT_SPEC_HASH);
-
-        uint256 payerBalanceBefore = token.balanceOf(payer);
-        uint256 escrowBalanceBefore = token.balanceOf(address(escrow));
-
-        _fundOrder(payer, orderID);
-
         assertEq(token.balanceOf(payer), payerBalanceBefore - amount);
         assertEq(token.balanceOf(address(escrow)), escrowBalanceBefore + amount);
-        _assertState(orderID, Escrow.OrderState.Funded);
     }
 
     function test_ReleaseOrder_TransfersToPayeeSetsStateAndEmits() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
         uint256 payeeBalanceBefore = token.balanceOf(payee);
         uint256 escrowBalanceBefore = token.balanceOf(address(escrow));
@@ -240,23 +198,21 @@ contract EscrowTest is Test {
     }
 
     function test_ReleaseOrder_RevertsForNonPayer() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
         vm.prank(attacker);
         vm.expectRevert(Escrow.NotPayer.selector);
         escrow.releaseOrder(orderID);
     }
 
-    function test_ReleaseOrder_RevertsWhenNotFunded() public {
-        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-
+    function test_ReleaseOrder_RevertsForNonexistentOrder() public {
         vm.prank(payer);
-        vm.expectRevert(abi.encodeWithSelector(Escrow.InvalidState.selector, Escrow.OrderState.Created));
-        escrow.releaseOrder(orderID);
+        vm.expectRevert(abi.encodeWithSelector(Escrow.InvalidState.selector, Escrow.OrderState.None));
+        escrow.releaseOrder(999);
     }
 
     function test_ReleaseOrder_RevertsWhenAlreadyReleased() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
         vm.prank(payer);
         escrow.releaseOrder(orderID);
@@ -266,19 +222,17 @@ contract EscrowTest is Test {
         escrow.releaseOrder(orderID);
     }
 
-    function test_RefundOrder_RevertsWhenNotFunded() public {
-        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-
+    function test_RefundOrder_RevertsForNonexistentOrder() public {
         vm.prank(keeper);
-        vm.expectRevert(abi.encodeWithSelector(Escrow.InvalidState.selector, Escrow.OrderState.Created));
-        escrow.refundOrder(orderID);
+        vm.expectRevert(abi.encodeWithSelector(Escrow.InvalidState.selector, Escrow.OrderState.None));
+        escrow.refundOrder(999);
     }
 
     function test_RefundOrder_RevertsBeforeTimeout() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT() - 1);
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT() - 1);
 
         vm.prank(keeper);
         vm.expectRevert(Escrow.TimeoutNotReached.selector);
@@ -286,10 +240,10 @@ contract EscrowTest is Test {
     }
 
     function test_RefundOrder_AtExactTimeoutRefundsAndEmits() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT());
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT());
 
         uint256 payerBalanceBefore = token.balanceOf(payer);
         uint256 escrowBalanceBefore = token.balanceOf(address(escrow));
@@ -306,10 +260,10 @@ contract EscrowTest is Test {
     }
 
     function test_RefundOrder_OneSecondBeforeTimeoutReverts() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT() - 1);
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT() - 1);
 
         vm.prank(attacker);
         vm.expectRevert(Escrow.TimeoutNotReached.selector);
@@ -317,10 +271,10 @@ contract EscrowTest is Test {
     }
 
     function test_RefundOrder_AnyCallerCanExecute() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT());
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT());
 
         uint256 attackerBalanceBefore = token.balanceOf(attacker);
         uint256 payerBalanceBefore = token.balanceOf(payer);
@@ -334,10 +288,10 @@ contract EscrowTest is Test {
     }
 
     function test_RefundOrder_RevertsWhenAlreadyRefunded() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT());
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT());
 
         vm.prank(keeper);
         escrow.refundOrder(orderID);
@@ -348,10 +302,10 @@ contract EscrowTest is Test {
     }
 
     function test_RefundOrder_WorksLongAfterTimeout() public {
-        uint256 orderID = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT() + 365 days);
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT() + 365 days);
 
         vm.prank(keeper);
         escrow.refundOrder(orderID);
@@ -362,12 +316,13 @@ contract EscrowTest is Test {
     function testFuzz_RefundOrder_AfterTimeoutAnyCallerNoReward(address caller, uint96 rawAmount) public {
         vm.assume(caller != address(0));
         vm.assume(caller != payer);
+        vm.assume(caller != address(escrow));
 
         uint256 amount = bound(uint256(rawAmount), 1, INITIAL_BALANCE);
-        uint256 orderID = _createAndFundOrder(payer, payee, amount, DEFAULT_SPEC_HASH);
+        uint256 orderID = _createOrder(payer, payee, amount, DEFAULT_SPEC_HASH);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT());
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT());
 
         uint256 callerBalanceBefore = token.balanceOf(caller);
         uint256 payerBalanceBefore = token.balanceOf(payer);
@@ -380,9 +335,8 @@ contract EscrowTest is Test {
         _assertState(orderID, Escrow.OrderState.Refunded);
     }
 
-    function test_FullFlow_CreateFundRelease() public {
+    function test_FullFlow_CreateRelease() public {
         uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-        _fundOrder(payer, orderID);
 
         vm.prank(payer);
         escrow.releaseOrder(orderID);
@@ -392,12 +346,11 @@ contract EscrowTest is Test {
         _assertState(orderID, Escrow.OrderState.Released);
     }
 
-    function test_FullFlow_CreateFundRefund() public {
+    function test_FullFlow_CreateRefund() public {
         uint256 orderID = _createOrder(payer, payee, DEFAULT_AMOUNT, DEFAULT_SPEC_HASH);
-        _fundOrder(payer, orderID);
 
-        (, uint64 fundedAt, , , , ) = _getOrder(orderID);
-        vm.warp(uint256(fundedAt) + escrow.REFUND_TIMEOUT());
+        (, uint64 createdAt, , , , ) = _getOrder(orderID);
+        vm.warp(uint256(createdAt) + escrow.REFUND_TIMEOUT());
 
         vm.prank(keeper);
         escrow.refundOrder(orderID);
@@ -407,17 +360,17 @@ contract EscrowTest is Test {
     }
 
     function test_MultipleOrders_AreIsolatedAcrossTransitions() public {
-        uint256 orderA = _createAndFundOrder(payer, payee, DEFAULT_AMOUNT, bytes32(uint256(1)));
-        uint256 orderB = _createAndFundOrder(attacker, keeper, SECOND_AMOUNT, bytes32(uint256(2)));
+        uint256 orderA = _createOrder(payer, payee, DEFAULT_AMOUNT, bytes32(uint256(1)));
+        uint256 orderB = _createOrder(attacker, keeper, SECOND_AMOUNT, bytes32(uint256(2)));
 
         vm.prank(payer);
         escrow.releaseOrder(orderA);
 
         _assertState(orderA, Escrow.OrderState.Released);
-        _assertState(orderB, Escrow.OrderState.Funded);
+        _assertState(orderB, Escrow.OrderState.Created);
 
-        (, uint64 fundedAtB, , , , ) = _getOrder(orderB);
-        vm.warp(uint256(fundedAtB) + escrow.REFUND_TIMEOUT());
+        (, uint64 createdAtB, , , , ) = _getOrder(orderB);
+        vm.warp(uint256(createdAtB) + escrow.REFUND_TIMEOUT());
 
         vm.prank(payer);
         escrow.refundOrder(orderB);
@@ -429,7 +382,7 @@ contract EscrowTest is Test {
     function test_Orders_NonexistentOrderReturnsDefaults() public view {
         (
             address orderPayer,
-            uint64 fundedAt,
+            uint64 createdAt,
             Escrow.OrderState state,
             address orderPayee,
             uint256 amount,
@@ -437,7 +390,7 @@ contract EscrowTest is Test {
         ) = _getOrder(999_999);
 
         assertEq(orderPayer, address(0));
-        assertEq(fundedAt, 0);
+        assertEq(createdAt, 0);
         assertEq(uint8(state), uint8(Escrow.OrderState.None));
         assertEq(orderPayee, address(0));
         assertEq(amount, 0);
@@ -452,19 +405,6 @@ contract EscrowTest is Test {
         orderID = escrow.createOrder(orderPayee, amount, specHash);
     }
 
-    function _fundOrder(address orderPayer, uint256 orderID) internal {
-        vm.prank(orderPayer);
-        escrow.fundOrder(orderID);
-    }
-
-    function _createAndFundOrder(address orderPayer, address orderPayee, uint256 amount, bytes32 specHash)
-        internal
-        returns (uint256 orderID)
-    {
-        orderID = _createOrder(orderPayer, orderPayee, amount, specHash);
-        _fundOrder(orderPayer, orderID);
-    }
-
     function _assertState(uint256 orderID, Escrow.OrderState expectedState) internal view {
         (, , Escrow.OrderState currentState, , , ) = _getOrder(orderID);
         assertEq(uint8(currentState), uint8(expectedState));
@@ -475,7 +415,7 @@ contract EscrowTest is Test {
         view
         returns (
             address orderPayer,
-            uint64 fundedAt,
+            uint64 createdAt,
             Escrow.OrderState state,
             address orderPayee,
             uint256 amount,

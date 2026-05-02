@@ -48,7 +48,54 @@ $ anvil
 ### Deploy
 
 ```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+$ FOUNDRY_PROFILE=0g_mainnet forge script script/Deploy.s.sol:DeployScript --broadcast
+```
+
+For 0G mainnet, make sure `.env` contains:
+
+```shell
+PRIVATE_KEY=0x...
+ETH_GAS_PRICE=3000000000
+ETH_PRIORITY_GAS_PRICE=2000000001
+```
+
+### Verify on 0G Chain Scan
+
+0G mainnet uses a custom verifier endpoint:
+
+```shell
+https://chainscan.0g.ai/open/api
+```
+
+Make sure `.env` contains `ETHERSCAN_API_KEY`. 0G's docs use a placeholder value, so `ETHERSCAN_API_KEY=PLACEHOLDER` is enough if you do not have a real key.
+
+Do not use `--watch` with 0G's custom verifier. The submission can succeed, but Foundry may fail when polling the verification status.
+
+Verify `RiveUSD`:
+
+```shell
+FOUNDRY_PROFILE=0g_mainnet forge verify-contract \
+  --chain-id 16661 \
+  --verifier custom \
+  --verifier-api-key "${ETHERSCAN_API_KEY:-PLACEHOLDER}" \
+  --verifier-url "https://chainscan.0g.ai/open/api" \
+  --compiler-version "v0.8.33+commit.64118f21" \
+  <RIVE_USD_ADDRESS> \
+  src/mocks/RiveUSD.sol:RiveUSD
+```
+
+Verify `Escrow`:
+
+```shell
+FOUNDRY_PROFILE=0g_mainnet forge verify-contract \
+  --chain-id 16661 \
+  --verifier custom \
+  --verifier-api-key "${ETHERSCAN_API_KEY:-PLACEHOLDER}" \
+  --verifier-url "https://chainscan.0g.ai/open/api" \
+  --compiler-version "v0.8.33+commit.64118f21" \
+  --constructor-args $(cast abi-encode "constructor(address)" <RIVE_USD_ADDRESS>) \
+  <ESCROW_ADDRESS> \
+  src/Escrow.sol:Escrow
 ```
 
 ### Cast

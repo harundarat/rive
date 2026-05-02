@@ -12,7 +12,14 @@ evm_version = "cancun"
 localhost = "http://localhost:8545"
 
 [profile.0g_testnet]
-gas_price = 2000000001
+gas_price = 3000000000
+eth_rpc_url = "https://evmrpc-testnet.0g.ai"
+evm_version = "cancun"
+
+[profile.0g_mainnet]
+gas_price = 3000000000
+eth_rpc_url = "https://evmrpc.0g.ai"
+chain_id = 16661
 evm_version = "cancun"
 
 [etherscan]

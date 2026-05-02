@@ -2,9 +2,10 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"os"
 
+	zgcommon "github.com/0gfoundation/0g-storage-client/common"
 	"github.com/0gfoundation/0g-storage-client/common/blockchain"
 	"github.com/0gfoundation/0g-storage-client/core"
 	"github.com/0gfoundation/0g-storage-client/indexer"
@@ -12,7 +13,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/harundarat/rive/backend/internal/config"
 	"github.com/harundarat/rive/backend/internal/domain"
+	"github.com/harundarat/rive/backend/pkg/canonicaljson"
 	"github.com/openweb3/web3go"
+	"github.com/sirupsen/logrus"
 )
 
 type ZGClient struct {
@@ -22,7 +25,12 @@ type ZGClient struct {
 
 func NewZGStorageClient(cfg config.ZeroGStorageConfig) (*ZGClient, error) {
 	w3 := blockchain.MustNewWeb3(cfg.EVMRPC, cfg.PrivateKey)
-	idx, err := indexer.NewClient(cfg.IndexerRPC, indexer.IndexerClientOption{})
+	idx, err := indexer.NewClient(cfg.IndexerRPC, indexer.IndexerClientOption{
+		LogOption: zgcommon.LogOption{
+			LogLevel: logrus.InfoLevel,
+		},
+	})
+
 	if err != nil {
 		w3.Close()
 		return nil, err
@@ -35,34 +43,36 @@ func (c *ZGClient) Close() {
 	c.W3.Close()
 }
 
-func (c *ZGClient) UploadJSON(ctx context.Context, data map[string]any) (*domain.ZGUploadOutput, error) {
-	// 1. Marshal to JSON
-	jsonBytes, err := json.Marshal(data)
+func (c *ZGClient) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
+	jsonBytes, err := canonicalJSONBytes(data)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Write to temp file
-	tmpFile, err := os.CreateTemp("", "rive-*.json")
+	return c.UploadBytes(ctx, jsonBytes)
+}
+
+func (c *ZGClient) UploadBytes(ctx context.Context, data []byte) (*domain.ZGUploadOutput, error) {
+	tmpFile, err := os.CreateTemp("", "rive-*")
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(tmpFile.Name())
 
-	_, err = tmpFile.Write(jsonBytes)
-	if err != nil {
+	if _, err = tmpFile.Write(data); err != nil {
+		tmpFile.Close()
 		return nil, err
 	}
-	tmpFile.Close()
+	if err = tmpFile.Close(); err != nil {
+		return nil, err
+	}
 
-	// 3. Open with 0G SDK
 	file, err := core.Open(tmpFile.Name())
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	// 4. Upload
 	opt := transfer.UploadOption{
 		Submitter:        common.Address{},
 		Tags:             nil,
@@ -86,6 +96,16 @@ func (c *ZGClient) UploadJSON(ctx context.Context, data map[string]any) (*domain
 	if err != nil {
 		return nil, err
 	}
+	if len(txHashes) == 0 {
+		return nil, errors.New("0g storage upload returned no transaction hashes")
+	}
+	if len(roots) == 0 {
+		return nil, errors.New("0g storage upload returned no root hashes")
+	}
 
 	return &domain.ZGUploadOutput{TxHash: txHashes[0].String(), RootHash: roots[0].String()}, nil
+}
+
+func canonicalJSONBytes(data any) ([]byte, error) {
+	return canonicaljson.Bytes(data)
 }
