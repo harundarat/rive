@@ -23,7 +23,7 @@ func (r *AgentRepository) FindByWalletAddress(ctx context.Context, walletAddress
 	err := r.db.QueryRow(ctx, `
 		SELECT id, agent_id_0g, wallet_address, reputation_score, metadata_cid, created_at
 		FROM agents
-		WHERE wallet_address = $1
+		WHERE LOWER(wallet_address) = LOWER($1)
 	`, walletAddress).Scan(
 		&agent.ID,
 		&agent.AgentID0G,

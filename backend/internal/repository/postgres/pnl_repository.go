@@ -189,7 +189,7 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 	rows, err := r.db.Query(ctx, `
 		SELECT
 			netting_batches.id::text,
-			COALESCE(MIN(NULLIF(journal_entries.storage_cid, '')), netting_batches.settlement_tx_hash) AS storage_root_hash,
+			COALESCE(MIN(NULLIF(journal_entries.storage_cid, '')), netting_batches.manifest_cid, netting_batches.settlement_tx_hash) AS storage_root_hash,
 			COUNT(DISTINCT journal_entries.id)::bigint AS entry_count,
 			netting_batches.updated_at
 		FROM ledger_entries
@@ -200,7 +200,7 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 			AND accounts.type IN ('revenue', 'expense')
 			AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
 			AND ledger_entries.created_at < $3::timestamptz
-		GROUP BY netting_batches.id, netting_batches.settlement_tx_hash, netting_batches.updated_at
+		GROUP BY netting_batches.id, netting_batches.manifest_cid, netting_batches.settlement_tx_hash, netting_batches.updated_at
 		ORDER BY netting_batches.updated_at DESC, netting_batches.id
 	`, agentID, pnlTimeArg(request.From), request.To)
 	if err != nil {

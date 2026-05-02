@@ -675,6 +675,7 @@ type ledgerPosting struct {
 	AccountName string
 	AccountType domain.AccountType
 	EntryType   domain.LedgerEntryType
+	Amount      big.Int
 }
 
 func (r *WorkOrderRepository) withTx(ctx context.Context, fn func(tx workOrderTx) (bool, error)) (updated bool, err error) {

@@ -8,6 +8,7 @@ func NewRouter(
 	quickNodeWebhookHandler *QuickNodeWebhookHandler,
 	storageHandler *StorageHandler,
 	ledgerHandler *LedgerHandler,
+	nettingHandler *NettingHandler,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -16,6 +17,7 @@ func NewRouter(
 		r.Get("/work-orders/{onchainOrderID}", workOrderHandler.Get)
 		r.Post("/work-orders/{onchainOrderID}/delivery", workOrderHandler.SubmitDelivery)
 		r.Get("/ledger/{walletAddress}/pnl", ledgerHandler.GetPnL)
+		r.Post("/payments/intent", nettingHandler.CreatePaymentIntent)
 		r.Post("/storage/upload", storageHandler.Upload)
 		r.Post("/webhooks/quicknode/escrow-events", quickNodeWebhookHandler.HandleEscrowEvents)
 

@@ -53,14 +53,23 @@ type ZeroGStorageConfig struct {
 	PrivateKey string `mapstructure:"ZG_PRIVATE_KEY"`
 }
 
+type NettingConfig struct {
+	SettlementAddress string `mapstructure:"NETTING_SETTLEMENT_ADDRESS"`
+	SettlerPrivateKey string `mapstructure:"NETTING_SETTLER_PRIVATE_KEY"`
+	WindowSeconds     int    `mapstructure:"NETTING_WINDOW_SECONDS"`
+}
+
 type Config struct {
 	Database               DatabaseConfig     `mapstructure:",squash"`
 	ZeroG                  ZeroGStorageConfig `mapstructure:",squash"`
+	Netting                NettingConfig      `mapstructure:",squash"`
 	QuickNodeWebhookSecret string             `mapstructure:"QUICKNODE_WEBHOOK_SECRET"`
 	EscrowContractAddress  string             `mapstructure:"ESCROW_CONTRACT_ADDRESS"`
 }
 
 func Load() (*Config, error) {
+	viper.SetDefault("NETTING_WINDOW_SECONDS", 60)
+
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
 	viper.AutomaticEnv()
