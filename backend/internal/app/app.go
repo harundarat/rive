@@ -1,13 +1,16 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/harundarat/rive/backend/internal/config"
 	deliveryhttp "github.com/harundarat/rive/backend/internal/delivery/http"
 	"github.com/harundarat/rive/backend/internal/infrastructure/database"
+	"github.com/harundarat/rive/backend/internal/infrastructure/settlement"
 	"github.com/harundarat/rive/backend/internal/infrastructure/storage"
 	postgresrepo "github.com/harundarat/rive/backend/internal/repository/postgres"
 	"github.com/harundarat/rive/backend/internal/usecase"
@@ -39,17 +42,32 @@ func Initialize() (*App, error) {
 	agentRepository := postgresrepo.NewAgentRepository(pgDB)
 	workOrderRepository := postgresrepo.NewWorkOrderRepository(pgDB)
 	pnlRepository := postgresrepo.NewPnLRepository(pgDB)
+	nettingRepository := postgresrepo.NewNettingRepository(pgDB)
+
+	nettingGateway, err := settlement.NewNettingGateway(cfg.ZeroG, cfg.Netting)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize netting settlement gateway: %w", err)
+	}
 
 	// Usecase Layer
 	healthUsecase := usecase.NewHealthUsecase(zgClient)
 	workOrderUsecase := usecase.NewWorkOrderUsecase(zgClient, workOrderRepository, agentRepository)
 	pnlUsecase := usecase.NewPnLUsecase(pnlRepository)
+	nettingUsecase := usecase.NewNettingUsecase(
+		zgClient,
+		nettingRepository,
+		agentRepository,
+		nettingGateway,
+		time.Duration(cfg.Netting.WindowSeconds)*time.Second,
+	)
+	nettingUsecase.Start(context.Background())
 
 	// Handler Layer
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
 	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
 	ledgerHandler := deliveryhttp.NewLedgerHandler(pnlUsecase)
 	storageHandler := deliveryhttp.NewStorageHandler(zgClient)
+	nettingHandler := deliveryhttp.NewNettingHandler(nettingUsecase)
 	quickNodeWebhookHandler := deliveryhttp.NewQuickNodeWebhookHandler(
 		cfg.QuickNodeWebhookSecret,
 		cfg.EscrowContractAddress,
@@ -57,7 +75,7 @@ func Initialize() (*App, error) {
 	)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler, ledgerHandler)
+	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler, ledgerHandler, nettingHandler)
 
 	log.Println("Starting application...")
 

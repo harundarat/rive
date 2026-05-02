@@ -10,4 +10,6 @@ var (
 	ErrPayeeMismatch         = errors.New("payee mismatch")
 	ErrOrderNotFunded        = errors.New("order not funded")
 	ErrDeliveryAlreadyPosted = errors.New("delivery already posted")
+	ErrUnsupportedAsset      = errors.New("unsupported asset")
+	ErrSettlement            = errors.New("settlement error")
 )
