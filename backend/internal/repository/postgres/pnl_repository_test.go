@@ -172,6 +172,18 @@ func assignFakePnLValue(dest any, value any) error {
 			return nil
 		}
 		*target = value.(pgtype.Text)
+	case *pgtype.UUID:
+		if value == nil {
+			*target = pgtype.UUID{}
+			return nil
+		}
+		*target = value.(pgtype.UUID)
+	case *pgtype.Timestamptz:
+		if value == nil {
+			*target = pgtype.Timestamptz{}
+			return nil
+		}
+		*target = value.(pgtype.Timestamptz)
 	default:
 		return errors.New("unsupported scan destination")
 	}
