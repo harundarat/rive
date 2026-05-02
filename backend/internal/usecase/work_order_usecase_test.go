@@ -982,6 +982,39 @@ func TestWorkOrderUsecaseGetByOnchainOrderIDSuccess(t *testing.T) {
 	}
 }
 
+func TestWorkOrderUsecaseGetByOnchainOrderIDAllowsZero(t *testing.T) {
+	orderID := bigIntFromString("0")
+	stored := domain.WorkOrder{
+		ID:             fixedWorkOrderID,
+		IdempotencyKey: "wo-request-zero",
+		CreatorID:      fixedPayerID,
+		ProviderID:     fixedPayeeID,
+		Amount:         bigIntFromString("1000000"),
+		Status:         domain.WorkOrderStatusFunded,
+		SpecHash:       testRootHash,
+		SpecVersion:    "1.0",
+		SpecTxHash:     testTxHash,
+		OnchainOrderID: &orderID,
+		CreatedAt:      fixedTime,
+		UpdatedAt:      fixedTime,
+	}
+	workOrders := &fakeWorkOrderRepository{
+		byOnchainOrderID: map[string]domain.WorkOrder{"0": stored},
+	}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	output, err := uc.GetByOnchainOrderID(context.Background(), "0")
+	if err != nil {
+		t.Fatalf("GetByOnchainOrderID returned error: %v", err)
+	}
+	if output.OnchainOrderID == nil || output.OnchainOrderID.Sign() != 0 {
+		t.Fatalf("expected onchain order id 0, got %v", output.OnchainOrderID)
+	}
+	if workOrders.findOnchainCalls != 1 {
+		t.Fatalf("expected 1 find call, got %d", workOrders.findOnchainCalls)
+	}
+}
+
 func TestWorkOrderUsecaseGetByOnchainOrderIDValidation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -989,7 +1022,6 @@ func TestWorkOrderUsecaseGetByOnchainOrderIDValidation(t *testing.T) {
 	}{
 		{name: "empty", id: ""},
 		{name: "non-numeric", id: "abc"},
-		{name: "zero", id: "0"},
 		{name: "negative", id: "-1"},
 	}
 

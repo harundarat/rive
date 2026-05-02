@@ -366,8 +366,8 @@ func parseOnchainOrderID(value string) (big.Int, string, error) {
 	if trimmed == "" {
 		return big.Int{}, "", domain.NewValidationError("onchainOrderID is required")
 	}
-	if _, ok := orderID.SetString(trimmed, 10); !ok || orderID.Sign() <= 0 {
-		return big.Int{}, "", domain.NewValidationError("onchainOrderID must be a positive integer")
+	if _, ok := orderID.SetString(trimmed, 10); !ok || orderID.Sign() < 0 {
+		return big.Int{}, "", domain.NewValidationError("onchainOrderID must be a non-negative integer")
 	}
 
 	return *orderID, trimmed, nil
