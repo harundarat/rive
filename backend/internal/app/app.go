@@ -50,6 +50,7 @@ func Initialize() (*App, error) {
 	}
 
 	// Usecase Layer
+	agentUsecase := usecase.NewAgentUsecase(agentRepository)
 	healthUsecase := usecase.NewHealthUsecase(zgClient)
 	workOrderUsecase := usecase.NewWorkOrderUsecase(zgClient, workOrderRepository, agentRepository)
 	pnlUsecase := usecase.NewPnLUsecase(pnlRepository)
@@ -63,6 +64,7 @@ func Initialize() (*App, error) {
 	nettingUsecase.Start(context.Background())
 
 	// Handler Layer
+	agentHandler := deliveryhttp.NewAgentHandler(agentUsecase)
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
 	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
 	ledgerHandler := deliveryhttp.NewLedgerHandler(pnlUsecase)
@@ -75,7 +77,7 @@ func Initialize() (*App, error) {
 	)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler, ledgerHandler, nettingHandler)
+	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler, ledgerHandler, nettingHandler, agentHandler)
 
 	log.Println("Starting application...")
 
