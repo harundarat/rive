@@ -9,10 +9,12 @@ func NewRouter(
 	storageHandler *StorageHandler,
 	ledgerHandler *LedgerHandler,
 	nettingHandler *NettingHandler,
+	agentHandler *AgentHandler,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Route("/api", func(r chi.Router) {
+		r.Post("/agents/onboard", agentHandler.Onboard)
 		r.Post("/work-orders", workOrderHandler.Create)
 		r.Get("/work-orders/{onchainOrderID}", workOrderHandler.Get)
 		r.Post("/work-orders/{onchainOrderID}/delivery", workOrderHandler.SubmitDelivery)

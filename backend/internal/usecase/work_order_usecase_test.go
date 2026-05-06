@@ -259,6 +259,14 @@ func (r *fakeAgentRepository) FindByWalletAddress(ctx context.Context, walletAdd
 	return nil, domain.ErrNotFound
 }
 
+func (r *fakeAgentRepository) Create(ctx context.Context, agent domain.Agent) error {
+	if r.byWallet == nil {
+		r.byWallet = map[string]domain.Agent{}
+	}
+	r.byWallet[agent.WalletAddress] = agent
+	return nil
+}
+
 func TestWorkOrderUsecaseUploadSpecStoresSpecAndWorkOrder(t *testing.T) {
 	storage := &fakeZGStorage{}
 	workOrders := &fakeWorkOrderRepository{}

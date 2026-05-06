@@ -41,3 +41,14 @@ func (r *AgentRepository) FindByWalletAddress(ctx context.Context, walletAddress
 
 	return &agent, nil
 }
+
+func (r *AgentRepository) Create(ctx context.Context, agent domain.Agent) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO agents (id, wallet_address, created_at)
+		VALUES ($1, $2, $3)
+	`, agent.ID, agent.WalletAddress, agent.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert agent: %w", err)
+	}
+	return nil
+}
