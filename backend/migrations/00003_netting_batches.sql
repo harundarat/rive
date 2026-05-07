@@ -4,7 +4,6 @@
         id UUID PRIMARY KEY,
         batch_status VARCHAR(255) NOT NULL CHECK (batch_status IN ('open', 'processing', 'settled', 'failed')),
         batch_hash VARCHAR(255) UNIQUE,
-        manifest_cid VARCHAR(255),
         manifest_tx_hash VARCHAR(255),
         settlement_tx_hash VARCHAR(255),
         failure_reason TEXT,

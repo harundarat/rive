@@ -255,20 +255,18 @@ func (r *NettingRepository) MarkBatchSettled(ctx context.Context, settlement dom
 			SET
 				batch_status = $1,
 				batch_hash = $2,
-				manifest_cid = $3,
-				manifest_tx_hash = $4,
-				settlement_tx_hash = $5,
-				gross_intent_count = $6,
-				settlement_transfer_count = $7,
-				gross_amount = $8::numeric,
-				net_amount = $9::numeric,
-				updated_at = $10
-			WHERE id = $11
-				AND batch_status = $12
+				manifest_tx_hash = $3,
+				settlement_tx_hash = $4,
+				gross_intent_count = $5,
+				settlement_transfer_count = $6,
+				gross_amount = $7::numeric,
+				net_amount = $8::numeric,
+				updated_at = $9
+			WHERE id = $10
+				AND batch_status = $11
 		`,
 			string(domain.BatchStatusSettled),
 			settlement.BatchHash,
-			settlement.ManifestCID,
 			settlement.ManifestTxHash,
 			stringValue(settlement.SettlementTxHash),
 			settlement.GrossIntentCount,

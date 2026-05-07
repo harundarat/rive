@@ -281,6 +281,7 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	auditSQL := db.operations[3].sql
 	for _, expected := range []string{
 		"netting_batches.batch_status = 'settled'",
+		"netting_batches.batch_hash AS storage_root_hash",
 		"UNION ALL",
 		"journal_entries.netting_batch_id IS NULL",
 		"NULLIF(BTRIM(journal_entries.storage_cid), '') IS NOT NULL",
@@ -288,6 +289,9 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 		"ORDER BY audit_batches.anchored_at DESC, audit_batches.batch_id",
 	} {
 		assertSQLContains(t, auditSQL, expected)
+	}
+	if strings.Contains(auditSQL, "manifest_cid") {
+		t.Fatalf("expected audit SQL not to reference manifest_cid, got %s", auditSQL)
 	}
 }
 

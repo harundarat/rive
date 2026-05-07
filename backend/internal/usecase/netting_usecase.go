@@ -156,7 +156,6 @@ func (uc *NettingUsecase) FlushPending(ctx context.Context) (*domain.NettingBatc
 		return nil, fmt.Errorf("%w: upload netting batch manifest: %w", domain.ErrStorage, err)
 	}
 	summary.Settlement.BatchHash = uploadOutput.RootHash
-	summary.Settlement.ManifestCID = uploadOutput.RootHash
 	summary.Settlement.ManifestTxHash = uploadOutput.TxHash
 
 	instruction := domain.NettingSettlementInstruction{

@@ -20,7 +20,6 @@ type NettingBatch struct {
 	ID                      uuid.UUID   `json:"id"`
 	BatchStatus             BatchStatus `json:"batch_status"`
 	BatchHash               *string     `json:"batch_hash"`
-	ManifestCID             *string     `json:"manifest_cid"`
 	ManifestTxHash          *string     `json:"manifest_tx_hash"`
 	SettlementTxHash        *string     `json:"settlement_tx_hash"`
 	FailureReason           *string     `json:"failure_reason"`
@@ -60,7 +59,6 @@ type NettingSettlementReceipt struct {
 type NettingBatchSettlement struct {
 	BatchID                 uuid.UUID
 	BatchHash               string
-	ManifestCID             string
 	ManifestTxHash          string
 	SettlementTxHash        *string
 	GrossIntentCount        int
