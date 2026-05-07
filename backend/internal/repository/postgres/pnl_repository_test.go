@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	pnlTestAgentID = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a20")
-	pnlTestBatchID = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a30")
+	pnlTestAgentID         = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a20")
+	pnlTestBatchID         = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a30")
+	pnlTestEscrowJournalID = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a31")
 )
 
 type fakePnLSQLOperation struct {
@@ -56,7 +57,7 @@ func (db *fakePnLDB) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 	switch {
 	case strings.Contains(sql, "GROUP BY accounts.type, accounts.name"):
 		return db.accountRows, nil
-	case strings.Contains(sql, "GROUP BY netting_batches.id"):
+	case strings.Contains(sql, "UNION ALL") && strings.Contains(sql, "journal_entries.netting_batch_id IS NULL"):
 		return db.auditRows, nil
 	default:
 		return nil, errors.New("unexpected query")
@@ -194,6 +195,7 @@ func assignFakePnLValue(dest any, value any) error {
 func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	registeredAt := time.Date(2026, 4, 15, 8, 0, 0, 0, time.UTC)
 	anchoredAt := time.Date(2026, 4, 22, 15, 30, 0, 0, time.UTC)
+	escrowAnchoredAt := time.Date(2026, 4, 23, 9, 0, 0, 0, time.UTC)
 	from := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	db := &fakePnLDB{
@@ -204,6 +206,7 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 		}},
 		count: 20,
 		auditRows: &fakePnLRows{rows: [][]any{
+			{pnlTestEscrowJournalID.String(), pgtype.Text{String: "0xescrow123", Valid: true}, int64(1), escrowAnchoredAt},
 			{pnlTestBatchID.String(), pgtype.Text{String: "0xdef456", Valid: true}, int64(8), anchoredAt},
 		}},
 	}
@@ -236,10 +239,21 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	if len(report.Expenses) != 1 || report.Expenses[0].Account != "Service Expense" || report.Expenses[0].EntryCount != 5 {
 		t.Fatalf("unexpected expense summary: %+v", report.Expenses)
 	}
-	if report.AuditTrail.JournalBatchCount != 1 || len(report.AuditTrail.Batches) != 1 {
+	if report.AuditTrail.JournalBatchCount != 2 || len(report.AuditTrail.Batches) != 2 {
 		t.Fatalf("unexpected audit trail: %+v", report.AuditTrail)
 	}
-	batch := report.AuditTrail.Batches[0]
+	escrowBatch := report.AuditTrail.Batches[0]
+	if escrowBatch.BatchID != pnlTestEscrowJournalID.String() ||
+		escrowBatch.StorageRootHash == nil ||
+		*escrowBatch.StorageRootHash != "0xescrow123" ||
+		escrowBatch.EntryCount != 1 ||
+		escrowBatch.AnchoredAt != "2026-04-23T09:00:00Z" {
+		t.Fatalf("unexpected escrow audit batch: %+v", escrowBatch)
+	}
+	if escrowBatch.ExplorerURL == nil || *escrowBatch.ExplorerURL != "https://storagescan.0g.ai/tx/0xescrow123" {
+		t.Fatalf("unexpected escrow explorer URL: %v", escrowBatch.ExplorerURL)
+	}
+	batch := report.AuditTrail.Batches[1]
 	if batch.BatchID != pnlTestBatchID.String() || batch.StorageRootHash == nil || *batch.StorageRootHash != "0xdef456" {
 		t.Fatalf("unexpected audit batch: %+v", batch)
 	}
@@ -264,7 +278,17 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	if db.operations[1].args[0] != pnlTestAgentID || db.operations[1].args[1] != from || db.operations[1].args[2] != to {
 		t.Fatalf("unexpected account query args: %+v", db.operations[1].args)
 	}
-	assertSQLContains(t, db.operations[3].sql, "netting_batches.batch_status = 'settled'")
+	auditSQL := db.operations[3].sql
+	for _, expected := range []string{
+		"netting_batches.batch_status = 'settled'",
+		"UNION ALL",
+		"journal_entries.netting_batch_id IS NULL",
+		"NULLIF(BTRIM(journal_entries.storage_cid), '') IS NOT NULL",
+		"1::bigint AS entry_count",
+		"ORDER BY audit_batches.anchored_at DESC, audit_batches.batch_id",
+	} {
+		assertSQLContains(t, auditSQL, expected)
+	}
 }
 
 func TestPnLRepositoryGetPnLReturnsZeroReportForAgentWithoutPnLRows(t *testing.T) {

@@ -188,21 +188,49 @@ func (r *PnLRepository) countPnLTransactions(ctx context.Context, agentID uuid.U
 func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.UUID, request domain.PnLReportRequest) ([]domain.PnLAuditBatch, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
-			netting_batches.id::text,
-			COALESCE(MIN(NULLIF(journal_entries.storage_cid, '')), netting_batches.manifest_cid, netting_batches.settlement_tx_hash) AS storage_root_hash,
-			COUNT(DISTINCT journal_entries.id)::bigint AS entry_count,
-			netting_batches.updated_at
-		FROM ledger_entries
-		INNER JOIN accounts ON accounts.id = ledger_entries.account_id
-		INNER JOIN journal_entries ON journal_entries.id = ledger_entries.journal_entry_id
-		INNER JOIN netting_batches ON netting_batches.id = journal_entries.netting_batch_id
-		WHERE accounts.agent_id = $1
-			AND accounts.type IN ('revenue', 'expense')
-			AND netting_batches.batch_status = 'settled'
-			AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
-			AND ledger_entries.created_at < $3::timestamptz
-		GROUP BY netting_batches.id, netting_batches.manifest_cid, netting_batches.settlement_tx_hash, netting_batches.updated_at
-		ORDER BY netting_batches.updated_at DESC, netting_batches.id
+			audit_batches.batch_id,
+			audit_batches.storage_root_hash,
+			audit_batches.entry_count,
+			audit_batches.anchored_at
+		FROM (
+			SELECT
+				netting_batches.id::text AS batch_id,
+				COALESCE(MIN(NULLIF(journal_entries.storage_cid, '')), netting_batches.manifest_cid, netting_batches.settlement_tx_hash) AS storage_root_hash,
+				COUNT(DISTINCT journal_entries.id)::bigint AS entry_count,
+				netting_batches.updated_at AS anchored_at
+			FROM ledger_entries
+			INNER JOIN accounts ON accounts.id = ledger_entries.account_id
+			INNER JOIN journal_entries ON journal_entries.id = ledger_entries.journal_entry_id
+			INNER JOIN netting_batches ON netting_batches.id = journal_entries.netting_batch_id
+			WHERE accounts.agent_id = $1
+				AND accounts.type IN ('revenue', 'expense')
+				AND netting_batches.batch_status = 'settled'
+				AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
+				AND ledger_entries.created_at < $3::timestamptz
+			GROUP BY netting_batches.id, netting_batches.manifest_cid, netting_batches.settlement_tx_hash, netting_batches.updated_at
+
+			UNION ALL
+
+			SELECT
+				journal_entries.id::text AS batch_id,
+				journal_entries.storage_cid AS storage_root_hash,
+				1::bigint AS entry_count,
+				journal_entries.created_at AS anchored_at
+			FROM journal_entries
+			WHERE journal_entries.netting_batch_id IS NULL
+				AND NULLIF(BTRIM(journal_entries.storage_cid), '') IS NOT NULL
+				AND EXISTS (
+					SELECT 1
+					FROM ledger_entries
+					INNER JOIN accounts ON accounts.id = ledger_entries.account_id
+					WHERE ledger_entries.journal_entry_id = journal_entries.id
+						AND accounts.agent_id = $1
+						AND accounts.type IN ('revenue', 'expense')
+						AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
+						AND ledger_entries.created_at < $3::timestamptz
+				)
+		) audit_batches
+		ORDER BY audit_batches.anchored_at DESC, audit_batches.batch_id
 	`, agentID, pnlTimeArg(request.From), request.To)
 	if err != nil {
 		return nil, fmt.Errorf("query pnl audit batches: %w", err)
