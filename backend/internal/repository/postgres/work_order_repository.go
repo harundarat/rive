@@ -32,6 +32,10 @@ type workOrderDB interface {
 	workOrderExecutor
 }
 
+type workOrderStorageUploader interface {
+	UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error)
+}
+
 type workOrderTx interface {
 	workOrderExecutor
 	Commit(ctx context.Context) error
@@ -39,14 +43,16 @@ type workOrderTx interface {
 }
 
 type WorkOrderRepository struct {
-	db      workOrderDB
-	beginTx func(ctx context.Context) (workOrderTx, error)
-	newID   func() (uuid.UUID, error)
+	db              workOrderDB
+	storageUploader workOrderStorageUploader
+	beginTx         func(ctx context.Context) (workOrderTx, error)
+	newID           func() (uuid.UUID, error)
 }
 
-func NewWorkOrderRepository(db *pgxpool.Pool) *WorkOrderRepository {
+func NewWorkOrderRepository(db *pgxpool.Pool, storageUploader workOrderStorageUploader) *WorkOrderRepository {
 	return &WorkOrderRepository{
-		db: db,
+		db:              db,
+		storageUploader: storageUploader,
 		beginTx: func(ctx context.Context) (workOrderTx, error) {
 			tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 			if err != nil {
@@ -678,6 +684,25 @@ type ledgerPosting struct {
 	Amount      big.Int
 }
 
+type bookkeepingJournalAnchor struct {
+	SchemaVersion  string                            `json:"schema_version"`
+	Kind           string                            `json:"kind"`
+	JournalEntryID uuid.UUID                         `json:"journal_entry_id"`
+	IdempotencyKey string                            `json:"idempotency_key"`
+	WorkOrderID    uuid.UUID                         `json:"work_order_id"`
+	Description    string                            `json:"description"`
+	CreatedAt      string                            `json:"created_at"`
+	Postings       []bookkeepingJournalAnchorPosting `json:"postings"`
+}
+
+type bookkeepingJournalAnchorPosting struct {
+	AccountName string                 `json:"account_name"`
+	AccountType domain.AccountType     `json:"account_type"`
+	EntryType   domain.LedgerEntryType `json:"entry_type"`
+	Amount      string                 `json:"amount"`
+	AgentID     uuid.UUID              `json:"agent_id"`
+}
+
 func (r *WorkOrderRepository) withTx(ctx context.Context, fn func(tx workOrderTx) (bool, error)) (updated bool, err error) {
 	tx, err := r.begin(ctx)
 	if err != nil {
@@ -714,6 +739,11 @@ func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrde
 		return fmt.Errorf("generate journal entry id: %w", err)
 	}
 
+	storageCID, err := r.uploadBookkeepingJournal(ctx, journalID, entry)
+	if err != nil {
+		return err
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO journal_entries (
 			id,
@@ -723,12 +753,13 @@ func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrde
 			storage_cid,
 			netting_batch_id,
 			created_at
-		) VALUES ($1, $2, $3, $4, NULL, NULL, $5)
+		) VALUES ($1, $2, $3, $4, $5, NULL, $6)
 	`,
 		journalID,
 		entry.IdempotencyKey,
 		entry.WorkOrderID,
 		entry.Description,
+		storageCID,
 		entry.CreatedAt,
 	)
 	if err != nil {
@@ -747,6 +778,43 @@ func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrde
 	}
 
 	return nil
+}
+
+func (r *WorkOrderRepository) uploadBookkeepingJournal(ctx context.Context, journalID uuid.UUID, entry bookkeepingEntry) (string, error) {
+	if r.storageUploader == nil {
+		return "", fmt.Errorf("%w: escrow journal storage uploader is not configured", domain.ErrStorage)
+	}
+
+	payload := bookkeepingJournalAnchor{
+		SchemaVersion:  "1.0",
+		Kind:           "escrow_journal_entry",
+		JournalEntryID: journalID,
+		IdempotencyKey: entry.IdempotencyKey,
+		WorkOrderID:    entry.WorkOrderID,
+		Description:    entry.Description,
+		CreatedAt:      entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Postings:       make([]bookkeepingJournalAnchorPosting, 0, len(entry.Postings)),
+	}
+	amount := entry.Amount.String()
+	for _, posting := range entry.Postings {
+		payload.Postings = append(payload.Postings, bookkeepingJournalAnchorPosting{
+			AccountName: posting.AccountName,
+			AccountType: posting.AccountType,
+			EntryType:   posting.EntryType,
+			Amount:      amount,
+			AgentID:     posting.AgentID,
+		})
+	}
+
+	uploadOutput, err := r.storageUploader.UploadJSON(ctx, payload)
+	if err != nil {
+		return "", fmt.Errorf("%w: upload escrow journal entry: %w", domain.ErrStorage, err)
+	}
+	if uploadOutput == nil || strings.TrimSpace(uploadOutput.RootHash) == "" {
+		return "", fmt.Errorf("%w: upload escrow journal entry returned empty root hash", domain.ErrStorage)
+	}
+
+	return uploadOutput.RootHash, nil
 }
 
 func (r *WorkOrderRepository) findOrCreateAccount(ctx context.Context, tx workOrderTx, posting ledgerPosting, createdAt time.Time) (uuid.UUID, error) {

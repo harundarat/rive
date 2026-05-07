@@ -199,6 +199,10 @@ func (uc *WorkOrderUsecase) RecordOrderCreated(ctx context.Context, event domain
 
 	updated, err := uc.workOrderRepository.RecordOrderCreated(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStorage) {
+			return false, fmt.Errorf("%w: record order created: %w", domain.ErrStorage, err)
+		}
+
 		return false, fmt.Errorf("%w: record order created: %w", domain.ErrPersistence, err)
 	}
 
@@ -210,6 +214,10 @@ func (uc *WorkOrderUsecase) RollbackOrderCreated(ctx context.Context, event doma
 
 	updated, err := uc.workOrderRepository.RollbackOrderCreated(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStorage) {
+			return false, fmt.Errorf("%w: rollback order created: %w", domain.ErrStorage, err)
+		}
+
 		return false, fmt.Errorf("%w: rollback order created: %w", domain.ErrPersistence, err)
 	}
 
@@ -221,6 +229,10 @@ func (uc *WorkOrderUsecase) RecordOrderReleased(ctx context.Context, event domai
 
 	updated, err := uc.workOrderRepository.RecordOrderReleased(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStorage) {
+			return false, fmt.Errorf("%w: record order released: %w", domain.ErrStorage, err)
+		}
+
 		return false, fmt.Errorf("%w: record order released: %w", domain.ErrPersistence, err)
 	}
 
@@ -232,6 +244,10 @@ func (uc *WorkOrderUsecase) RollbackOrderReleased(ctx context.Context, event dom
 
 	updated, err := uc.workOrderRepository.RollbackOrderReleased(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStorage) {
+			return false, fmt.Errorf("%w: rollback order released: %w", domain.ErrStorage, err)
+		}
+
 		return false, fmt.Errorf("%w: rollback order released: %w", domain.ErrPersistence, err)
 	}
 
@@ -243,6 +259,10 @@ func (uc *WorkOrderUsecase) RecordOrderRefunded(ctx context.Context, event domai
 
 	updated, err := uc.workOrderRepository.RecordOrderRefunded(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStorage) {
+			return false, fmt.Errorf("%w: record order refunded: %w", domain.ErrStorage, err)
+		}
+
 		return false, fmt.Errorf("%w: record order refunded: %w", domain.ErrPersistence, err)
 	}
 
@@ -254,6 +274,10 @@ func (uc *WorkOrderUsecase) RollbackOrderRefunded(ctx context.Context, event dom
 
 	updated, err := uc.workOrderRepository.RollbackOrderRefunded(ctx, event)
 	if err != nil {
+		if errors.Is(err, domain.ErrStorage) {
+			return false, fmt.Errorf("%w: rollback order refunded: %w", domain.ErrStorage, err)
+		}
+
 		return false, fmt.Errorf("%w: rollback order refunded: %w", domain.ErrPersistence, err)
 	}
 

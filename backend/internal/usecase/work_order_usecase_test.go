@@ -734,6 +734,31 @@ func TestWorkOrderUsecaseRecordOrderCreatedReturnsPersistenceError(t *testing.T)
 	}
 }
 
+func TestWorkOrderUsecaseRecordOrderCreatedReturnsStorageError(t *testing.T) {
+	expectedErr := errors.New("upload unavailable")
+	workOrders := &fakeWorkOrderRepository{recordErr: errors.Join(domain.ErrStorage, expectedErr)}
+	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+
+	_, err := uc.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
+		SpecHash:        testRootHash,
+		Payer:           "0xabc",
+		Payee:           "0xdef",
+		Amount:          bigIntFromString("1000000"),
+		OnchainOrderID:  bigIntFromString("1"),
+		TransactionHash: testTxHash,
+		RecordedAt:      fixedTime,
+	})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected original error, got %v", err)
+	}
+	if !errors.Is(err, domain.ErrStorage) {
+		t.Fatalf("expected domain storage error, got %v", err)
+	}
+	if errors.Is(err, domain.ErrPersistence) {
+		t.Fatalf("expected storage error not to be classified as persistence, got %v", err)
+	}
+}
+
 func TestWorkOrderUsecaseRollbackOrderCreatedReturnsPersistenceError(t *testing.T) {
 	expectedErr := errors.New("database unavailable")
 	workOrders := &fakeWorkOrderRepository{rollbackErr: expectedErr}

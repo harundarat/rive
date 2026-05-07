@@ -40,7 +40,7 @@ func Initialize() (*App, error) {
 
 	// Repository Layer
 	agentRepository := postgresrepo.NewAgentRepository(pgDB)
-	workOrderRepository := postgresrepo.NewWorkOrderRepository(pgDB)
+	workOrderRepository := postgresrepo.NewWorkOrderRepository(pgDB, zgClient)
 	pnlRepository := postgresrepo.NewPnLRepository(pgDB)
 	nettingRepository := postgresrepo.NewNettingRepository(pgDB)
 

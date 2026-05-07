@@ -131,6 +131,11 @@ func (h *QuickNodeWebhookHandler) HandleEscrowEvents(w nethttp.ResponseWriter, r
 
 			updated, err := h.updateWorkOrderFromEscrowEvent(r.Context(), event)
 			if err != nil {
+				if errors.Is(err, domain.ErrStorage) {
+					response.Error(w, apierror.New(nethttp.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_0G_STORAGE", err.Error()))
+					return
+				}
+
 				response.Error(w, apierror.New(nethttp.StatusInternalServerError, "FAILED_TO_UPDATE_WORK_ORDER", err.Error()))
 				return
 			}

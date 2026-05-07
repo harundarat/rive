@@ -358,6 +358,32 @@ func TestQuickNodeWebhookHandlerPersistenceError(t *testing.T) {
 	}
 }
 
+func TestQuickNodeWebhookHandlerStorageError(t *testing.T) {
+	handler, _, workOrderEvents := newTestQuickNodeWebhookHandler()
+	workOrderEvents.err = fmt.Errorf("%w: upload escrow journal entry: unavailable", domain.ErrStorage)
+	payload := validQuickNodeOrderCreatedPayload(false, testEscrowContractAddress, orderCreatedTopic)
+	req := signedQuickNodeWebhookRequest(t, payload, nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleEscrowEvents(rec, req)
+
+	if rec.Code != nethttp.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.Error.Code != "FAILED_TO_UPLOAD_TO_0G_STORAGE" {
+		t.Fatalf("expected storage error code, got %q", body.Error.Code)
+	}
+}
+
 func TestQuickNodeWebhookHandlerMissingSignatureHeaders(t *testing.T) {
 	handler, _, _ := newTestQuickNodeWebhookHandler()
 	req := httptest.NewRequest(nethttp.MethodPost, "/api/webhooks/quicknode/escrow-events", strings.NewReader("{}"))
