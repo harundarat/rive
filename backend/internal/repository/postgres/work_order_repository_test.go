@@ -20,9 +20,30 @@ var (
 	repositoryTestPayeeID     = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a21")
 )
 
+const (
+	repositoryTestStorageRootHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	repositoryTestStorageTxHash   = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
 type fakeSQLOperation struct {
 	sql  string
 	args []any
+}
+
+type fakeWorkOrderStorage struct {
+	data  any
+	err   error
+	calls int
+}
+
+func (s *fakeWorkOrderStorage) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
+	s.calls++
+	s.data = data
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return &domain.ZGUploadOutput{RootHash: repositoryTestStorageRootHash, TxHash: repositoryTestStorageTxHash}, nil
 }
 
 type fakeWorkOrderDB struct {
@@ -182,10 +203,15 @@ func (row fakeWorkOrderRow) Scan(dest ...any) error {
 }
 
 func newEventWorkOrderRepository(db *fakeWorkOrderDB) *WorkOrderRepository {
+	return newEventWorkOrderRepositoryWithStorage(db, &fakeWorkOrderStorage{})
+}
+
+func newEventWorkOrderRepositoryWithStorage(db *fakeWorkOrderDB, storage *fakeWorkOrderStorage) *WorkOrderRepository {
 	return &WorkOrderRepository{
-		db:      db,
-		beginTx: db.beginTx,
-		newID:   uuid.NewV7,
+		db:              db,
+		storageUploader: storage,
+		beginTx:         db.beginTx,
+		newID:           uuid.NewV7,
 	}
 }
 
@@ -552,6 +578,46 @@ func TestWorkOrderRepositoryRecordOrderCreatedReturnsFalseWhenPredicateDoesNotMa
 	}
 }
 
+func TestWorkOrderRepositoryEscrowBookkeepingRollsBackWhenStorageUploadFails(t *testing.T) {
+	db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
+	storageErr := errors.New("0g unavailable")
+	storage := &fakeWorkOrderStorage{err: storageErr}
+	repo := newEventWorkOrderRepositoryWithStorage(db, storage)
+
+	updated, err := repo.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
+		SpecHash:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Payer:           "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
+		Payee:           "0x1111111111111111111111111111111111111111",
+		Amount:          bigIntFromStringForRepositoryTest("1000000"),
+		OnchainOrderID:  bigIntFromStringForRepositoryTest("1"),
+		TransactionHash: "0xd31c0da964d78e3647319d57ab9ec84636e715fbb90751b61d46a3040b5d8c70",
+		BlockNumber:     "0x123",
+		LogIndex:        "0x4",
+		RecordedAt:      time.Date(2026, 4, 22, 10, 30, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("expected storage error")
+	}
+	if updated {
+		t.Fatal("expected updated=false")
+	}
+	if !errors.Is(err, domain.ErrStorage) || !errors.Is(err, storageErr) {
+		t.Fatalf("expected storage error wrapping original error, got %v", err)
+	}
+	if storage.calls != 1 {
+		t.Fatalf("expected one storage upload, got %d", storage.calls)
+	}
+	if db.containsSQL("INSERT INTO journal_entries") ||
+		db.containsSQL("INSERT INTO ledger_entries") ||
+		db.containsSQL("INSERT INTO accounts") ||
+		db.containsSQL("UPDATE accounts") {
+		t.Fatalf("expected no bookkeeping writes after storage failure, got %+v", db.operations)
+	}
+	if db.beginCalls != 1 || db.commitCalls != 0 || db.rollbackCalls != 1 {
+		t.Fatalf("expected rolled back transaction, got begin=%d commit=%d rollback=%d", db.beginCalls, db.commitCalls, db.rollbackCalls)
+	}
+}
+
 func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 	amount := bigIntFromStringForRepositoryTest("1000000")
 	orderID := bigIntFromStringForRepositoryTest("123")
@@ -700,7 +766,8 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := &fakeWorkOrderDB{target: validBookkeepingTarget()}
-			repo := newEventWorkOrderRepository(db)
+			storage := &fakeWorkOrderStorage{}
+			repo := newEventWorkOrderRepositoryWithStorage(db, storage)
 
 			updated, err := tt.run(repo)
 			if err != nil {
@@ -719,7 +786,37 @@ func TestWorkOrderRepositoryEscrowBookkeepingPostings(t *testing.T) {
 			if !strings.Contains(journals[0].args[3].(string), tt.journalContains) {
 				t.Fatalf("expected journal description to contain %q, got %q", tt.journalContains, journals[0].args[3])
 			}
-			assertArg(t, journals[0].args, 4, eventTime)
+			assertArg(t, journals[0].args, 4, repositoryTestStorageRootHash)
+			assertArg(t, journals[0].args, 5, eventTime)
+
+			if storage.calls != 1 {
+				t.Fatalf("expected one storage upload, got %d", storage.calls)
+			}
+			payload, ok := storage.data.(bookkeepingJournalAnchor)
+			if !ok {
+				t.Fatalf("expected bookkeepingJournalAnchor payload, got %T", storage.data)
+			}
+			if payload.SchemaVersion != "1.0" || payload.Kind != "escrow_journal_entry" {
+				t.Fatalf("unexpected payload metadata: %+v", payload)
+			}
+			if payload.JournalEntryID != journals[0].args[0].(uuid.UUID) ||
+				payload.IdempotencyKey != tt.journalKey ||
+				payload.WorkOrderID != repositoryTestWorkOrderID ||
+				payload.CreatedAt != eventTime.UTC().Format(time.RFC3339Nano) ||
+				!strings.Contains(payload.Description, tt.journalContains) {
+				t.Fatalf("unexpected journal anchor payload: %+v", payload)
+			}
+			if len(payload.Postings) != len(tt.accountNames) {
+				t.Fatalf("expected %d payload postings, got %d", len(tt.accountNames), len(payload.Postings))
+			}
+			for i := range payload.Postings {
+				if payload.Postings[i].AccountName != tt.accountNames[i] ||
+					string(payload.Postings[i].AccountType) != tt.accountTypes[i] ||
+					string(payload.Postings[i].EntryType) != tt.ledgerTypes[i] ||
+					payload.Postings[i].Amount != amount.String() {
+					t.Fatalf("unexpected payload posting %d: %+v", i, payload.Postings[i])
+				}
+			}
 
 			accountUpserts := db.operationsContaining("INSERT INTO accounts")
 			if len(accountUpserts) != len(tt.accountNames) {
