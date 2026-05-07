@@ -198,6 +198,7 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 		INNER JOIN netting_batches ON netting_batches.id = journal_entries.netting_batch_id
 		WHERE accounts.agent_id = $1
 			AND accounts.type IN ('revenue', 'expense')
+			AND netting_batches.batch_status = 'settled'
 			AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
 			AND ledger_entries.created_at < $3::timestamptz
 		GROUP BY netting_batches.id, netting_batches.manifest_cid, netting_batches.settlement_tx_hash, netting_batches.updated_at

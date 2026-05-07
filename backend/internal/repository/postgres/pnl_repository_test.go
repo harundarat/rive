@@ -264,6 +264,7 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	if db.operations[1].args[0] != pnlTestAgentID || db.operations[1].args[1] != from || db.operations[1].args[2] != to {
 		t.Fatalf("unexpected account query args: %+v", db.operations[1].args)
 	}
+	assertSQLContains(t, db.operations[3].sql, "netting_batches.batch_status = 'settled'")
 }
 
 func TestPnLRepositoryGetPnLReturnsZeroReportForAgentWithoutPnLRows(t *testing.T) {
