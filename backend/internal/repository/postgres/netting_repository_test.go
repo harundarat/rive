@@ -128,3 +128,52 @@ func TestNettingRepositoryClaimPendingIntentsLocksAndAssignsBatch(t *testing.T) 
 		t.Fatalf("expected journal batch assignment SQL, got %s", tx.operations[3].sql)
 	}
 }
+
+func TestNettingRepositoryMarkBatchSettledStoresBatchHashOnly(t *testing.T) {
+	batchID := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a44")
+	settledAt := time.Date(2026, 5, 2, 10, 1, 0, 0, time.UTC)
+	stopErr := errors.New("stop after first exec")
+	tx := &fakeNettingTx{execErr: stopErr}
+	repo := &NettingRepository{
+		beginTx: func(ctx context.Context) (nettingTx, error) {
+			return tx, nil
+		},
+	}
+
+	err := repo.MarkBatchSettled(context.Background(), domain.NettingBatchSettlement{
+		BatchID:                 batchID,
+		BatchHash:               "0xroot",
+		ManifestTxHash:          "0xtx",
+		GrossIntentCount:        2,
+		SettlementTransferCount: 2,
+		SettledAt:               settledAt,
+	})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("expected stop error, got %v", err)
+	}
+	if !tx.rolledBack || tx.committed {
+		t.Fatalf("expected rolled back transaction, committed=%v rolledBack=%v", tx.committed, tx.rolledBack)
+	}
+	if len(tx.operations) != 1 {
+		t.Fatalf("expected one update operation, got %d", len(tx.operations))
+	}
+
+	updateSQL := tx.operations[0].sql
+	if strings.Contains(updateSQL, "manifest_cid") {
+		t.Fatalf("expected settled update not to reference manifest_cid, got %s", updateSQL)
+	}
+	for _, expected := range []string{
+		"batch_hash = $2",
+		"manifest_tx_hash = $3",
+		"settlement_tx_hash = $4",
+		"WHERE id = $10",
+		"AND batch_status = $11",
+	} {
+		if !strings.Contains(updateSQL, expected) {
+			t.Fatalf("expected update SQL to contain %q, got %s", expected, updateSQL)
+		}
+	}
+	if tx.operations[0].args[1] != "0xroot" || tx.operations[0].args[2] != "0xtx" {
+		t.Fatalf("unexpected hash args: %+v", tx.operations[0].args)
+	}
+}

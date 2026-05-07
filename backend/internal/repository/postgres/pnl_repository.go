@@ -195,7 +195,7 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 		FROM (
 			SELECT
 				netting_batches.id::text AS batch_id,
-				COALESCE(MIN(NULLIF(journal_entries.storage_cid, '')), netting_batches.manifest_cid, netting_batches.settlement_tx_hash) AS storage_root_hash,
+				netting_batches.batch_hash AS storage_root_hash,
 				COUNT(DISTINCT journal_entries.id)::bigint AS entry_count,
 				netting_batches.updated_at AS anchored_at
 			FROM ledger_entries
@@ -207,7 +207,7 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 				AND netting_batches.batch_status = 'settled'
 				AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
 				AND ledger_entries.created_at < $3::timestamptz
-			GROUP BY netting_batches.id, netting_batches.manifest_cid, netting_batches.settlement_tx_hash, netting_batches.updated_at
+			GROUP BY netting_batches.id, netting_batches.batch_hash, netting_batches.updated_at
 
 			UNION ALL
 

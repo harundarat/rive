@@ -228,6 +228,12 @@ func TestNettingUsecaseFlushPendingUploadsAndSettles(t *testing.T) {
 	if settlement.SettlementTxHash == nil || *settlement.SettlementTxHash != txHash {
 		t.Fatalf("expected settlement tx hash %q, got %v", txHash, settlement.SettlementTxHash)
 	}
+	if settlement.BatchHash != testRootHash {
+		t.Fatalf("expected batch hash %q, got %q", testRootHash, settlement.BatchHash)
+	}
+	if repo.settled.BatchHash != testRootHash {
+		t.Fatalf("expected persisted batch hash %q, got %q", testRootHash, repo.settled.BatchHash)
+	}
 }
 
 func newTestNettingUsecase(repo *fakeNettingRepository, gateway *fakeNettingGateway) *NettingUsecase {
