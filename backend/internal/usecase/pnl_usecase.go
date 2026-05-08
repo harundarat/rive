@@ -68,6 +68,7 @@ func (uc *PnLUsecase) GetPnL(ctx context.Context, walletAddress string, fromRaw 
 		To:   formatPnLTime(to),
 	}
 	report.Asset = domain.PnLAssetRUSD
+	report.Decimals = domain.PnLAssetDecimals
 	report.GeneratedAt = formatPnLTime(now)
 	report.Version = domain.PnLVersion
 	if report.Revenue == nil {
@@ -75,6 +76,9 @@ func (uc *PnLUsecase) GetPnL(ctx context.Context, walletAddress string, fromRaw 
 	}
 	if report.Expenses == nil {
 		report.Expenses = []domain.PnLAccountSummary{}
+	}
+	if report.Transactions == nil {
+		report.Transactions = []domain.PnLTransaction{}
 	}
 	if report.AuditTrail.Batches == nil {
 		report.AuditTrail.Batches = []domain.PnLAuditBatch{}

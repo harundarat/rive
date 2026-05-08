@@ -35,6 +35,7 @@ func (uc *fakePnLUsecase) GetPnL(ctx context.Context, walletAddress string, from
 
 func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 	from := "2026-04-01T00:00:00Z"
+	auditBatchID := "018f95e4-3f8d-7b70-a4dd-2d9a833c4a31"
 	usecase := &fakePnLUsecase{
 		output: &domain.PnLReport{
 			Agent: domain.PnLAgent{
@@ -45,7 +46,8 @@ func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 				From: &from,
 				To:   "2026-05-01T00:00:00Z",
 			},
-			Asset: domain.PnLAssetRUSD,
+			Asset:    domain.PnLAssetRUSD,
+			Decimals: domain.PnLAssetDecimals,
 			Summary: domain.PnLSummary{
 				TotalRevenue:     "150000000",
 				TotalExpenses:    "45000000",
@@ -58,9 +60,37 @@ func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 			Expenses: []domain.PnLAccountSummary{
 				{Account: "Service Expense", Amount: "45000000", EntryCount: 5},
 			},
+			Transactions: []domain.PnLTransaction{
+				{
+					JournalEntryID: auditBatchID,
+					AuditBatchID:   &auditBatchID,
+					Source:         domain.PnLAuditSourceEscrowEvent,
+					Account:        "Service Revenue",
+					AccountType:    domain.AccountTypeRevenue,
+					EntryType:      domain.LedgerEntryTypeCredit,
+					Amount:         "150000000",
+					Counterparty: domain.PnLCounterparty{
+						Role:    domain.PnLCounterpartyRolePayer,
+						Address: "0x1111111111111111111111111111111111111111",
+					},
+					Reference: domain.PnLReference{
+						Type: domain.PnLReferenceTypeWorkOrder,
+						ID:   "018f95e4-3f8d-7b70-a4dd-2d9a833c4a40",
+					},
+					Description: "Escrow order released for on-chain order 42",
+					OccurredAt:  "2026-04-23T09:00:00Z",
+				},
+			},
 			AuditTrail: domain.PnLAuditTrail{
-				JournalBatchCount: 0,
-				Batches:           []domain.PnLAuditBatch{},
+				JournalBatchCount: 1,
+				Batches: []domain.PnLAuditBatch{
+					{
+						BatchID:    auditBatchID,
+						Source:     domain.PnLAuditSourceEscrowEvent,
+						EntryCount: 1,
+						AnchoredAt: "2026-04-23T09:00:00Z",
+					},
+				},
 			},
 			GeneratedAt: "2026-05-01T10:30:00Z",
 			Version:     domain.PnLVersion,
@@ -95,8 +125,19 @@ func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 	if body.Data.Summary.NetIncome != "105000000" {
 		t.Fatalf("expected net income, got %q", body.Data.Summary.NetIncome)
 	}
+	if body.Data.Decimals != domain.PnLAssetDecimals {
+		t.Fatalf("expected decimals %d, got %d", domain.PnLAssetDecimals, body.Data.Decimals)
+	}
 	if len(body.Data.Revenue) != 1 || body.Data.Revenue[0].Account != "Service Revenue" {
 		t.Fatalf("expected revenue details, got %+v", body.Data.Revenue)
+	}
+	if len(body.Data.Transactions) != 1 ||
+		body.Data.Transactions[0].Source != domain.PnLAuditSourceEscrowEvent ||
+		body.Data.Transactions[0].Counterparty.Address != "0x1111111111111111111111111111111111111111" {
+		t.Fatalf("expected transaction details, got %+v", body.Data.Transactions)
+	}
+	if len(body.Data.AuditTrail.Batches) != 1 || body.Data.AuditTrail.Batches[0].Source != domain.PnLAuditSourceEscrowEvent {
+		t.Fatalf("expected audit source, got %+v", body.Data.AuditTrail.Batches)
 	}
 }
 

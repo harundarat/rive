@@ -72,10 +72,10 @@ func TestPnLUsecaseGetPnLDefaultsPeriodAndMetadata(t *testing.T) {
 	if output.GeneratedAt != "2026-05-01T10:30:00Z" {
 		t.Fatalf("expected generatedAt, got %q", output.GeneratedAt)
 	}
-	if output.Asset != domain.PnLAssetRUSD || output.Version != domain.PnLVersion {
-		t.Fatalf("expected asset/version metadata, got %q/%q", output.Asset, output.Version)
+	if output.Asset != domain.PnLAssetRUSD || output.Decimals != domain.PnLAssetDecimals || output.Version != domain.PnLVersion {
+		t.Fatalf("expected asset/decimals/version metadata, got %q/%d/%q", output.Asset, output.Decimals, output.Version)
 	}
-	if output.Revenue == nil || output.Expenses == nil || output.AuditTrail.Batches == nil {
+	if output.Revenue == nil || output.Expenses == nil || output.Transactions == nil || output.AuditTrail.Batches == nil {
 		t.Fatal("expected non-nil response slices")
 	}
 }
