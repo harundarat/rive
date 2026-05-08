@@ -6,8 +6,20 @@ import (
 )
 
 const (
-	PnLAssetRUSD = "rUSD"
-	PnLVersion   = "1.0"
+	PnLAssetRUSD     = "rUSD"
+	PnLAssetDecimals = 18
+	PnLVersion       = "1.0"
+)
+
+const (
+	PnLAuditSourceEscrowEvent  = "escrow_event"
+	PnLAuditSourceNettingBatch = "netting_batch"
+
+	PnLCounterpartyRolePayer = "payer"
+	PnLCounterpartyRolePayee = "payee"
+
+	PnLReferenceTypeWorkOrder     = "work_order"
+	PnLReferenceTypePaymentIntent = "payment_intent"
 )
 
 type PnLUsecase interface {
@@ -25,15 +37,17 @@ type PnLReportRequest struct {
 }
 
 type PnLReport struct {
-	Agent       PnLAgent            `json:"agent"`
-	Period      PnLPeriod           `json:"period"`
-	Asset       string              `json:"asset"`
-	Summary     PnLSummary          `json:"summary"`
-	Revenue     []PnLAccountSummary `json:"revenue"`
-	Expenses    []PnLAccountSummary `json:"expenses"`
-	AuditTrail  PnLAuditTrail       `json:"auditTrail"`
-	GeneratedAt string              `json:"generatedAt"`
-	Version     string              `json:"version"`
+	Agent        PnLAgent            `json:"agent"`
+	Period       PnLPeriod           `json:"period"`
+	Asset        string              `json:"asset"`
+	Decimals     int                 `json:"decimals"`
+	Summary      PnLSummary          `json:"summary"`
+	Revenue      []PnLAccountSummary `json:"revenue"`
+	Expenses     []PnLAccountSummary `json:"expenses"`
+	Transactions []PnLTransaction    `json:"transactions"`
+	AuditTrail   PnLAuditTrail       `json:"auditTrail"`
+	GeneratedAt  string              `json:"generatedAt"`
+	Version      string              `json:"version"`
 }
 
 type PnLAgent struct {
@@ -66,8 +80,33 @@ type PnLAuditTrail struct {
 
 type PnLAuditBatch struct {
 	BatchID         string  `json:"batchId"`
+	Source          string  `json:"source"`
 	StorageRootHash *string `json:"storageRootHash"`
 	EntryCount      int64   `json:"entryCount"`
 	AnchoredAt      string  `json:"anchoredAt"`
 	ExplorerURL     *string `json:"explorerUrl"`
+}
+
+type PnLTransaction struct {
+	JournalEntryID string          `json:"journalEntryId"`
+	AuditBatchID   *string         `json:"auditBatchId"`
+	Source         string          `json:"source"`
+	Account        string          `json:"account"`
+	AccountType    AccountType     `json:"accountType"`
+	EntryType      LedgerEntryType `json:"entryType"`
+	Amount         string          `json:"amount"`
+	Counterparty   PnLCounterparty `json:"counterparty"`
+	Reference      PnLReference    `json:"reference"`
+	Description    string          `json:"description"`
+	OccurredAt     string          `json:"occurredAt"`
+}
+
+type PnLCounterparty struct {
+	Role    string `json:"role"`
+	Address string `json:"address"`
+}
+
+type PnLReference struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
 }
