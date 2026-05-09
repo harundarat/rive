@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+const DefaultCORSAllowedOrigins = "http://localhost:3000,http://127.0.0.1:3000"
+
 type DatabaseConfig struct {
 	Host         string `mapstructure:"DB_HOST"`
 	Port         int    `mapstructure:"DB_PORT"`
@@ -65,10 +67,16 @@ type Config struct {
 	Netting                NettingConfig      `mapstructure:",squash"`
 	QuickNodeWebhookSecret string             `mapstructure:"QUICKNODE_WEBHOOK_SECRET"`
 	EscrowContractAddress  string             `mapstructure:"ESCROW_CONTRACT_ADDRESS"`
+	CORSAllowedOrigins     string             `mapstructure:"CORS_ALLOWED_ORIGINS"`
+}
+
+func (c *Config) AllowedCORSOrigins() []string {
+	return splitCommaSeparated(c.CORSAllowedOrigins)
 }
 
 func Load() (*Config, error) {
 	viper.SetDefault("NETTING_WINDOW_SECONDS", 60)
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", DefaultCORSAllowedOrigins)
 
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
@@ -86,4 +94,18 @@ func Load() (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+func splitCommaSeparated(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+
+	return out
 }

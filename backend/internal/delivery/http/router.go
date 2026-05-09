@@ -10,8 +10,10 @@ func NewRouter(
 	ledgerHandler *LedgerHandler,
 	nettingHandler *NettingHandler,
 	agentHandler *AgentHandler,
+	corsAllowedOrigins []string,
 ) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(corsMiddleware(corsAllowedOrigins))
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/agents/onboard", agentHandler.Onboard)

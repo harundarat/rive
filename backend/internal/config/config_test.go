@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/url"
+	"reflect"
 	"testing"
 )
 
@@ -77,5 +78,17 @@ func TestDatabaseConfigDSNTrimsBlankSSLRootCert(t *testing.T) {
 
 	if parsed.Query().Has("sslrootcert") {
 		t.Fatalf("expected blank sslrootcert to be omitted, got %q", parsed.Query().Get("sslrootcert"))
+	}
+}
+
+func TestConfigAllowedCORSOriginsTrimsCommaSeparatedList(t *testing.T) {
+	cfg := Config{
+		CORSAllowedOrigins: " http://localhost:3000, ,https://app.example.com ",
+	}
+
+	got := cfg.AllowedCORSOrigins()
+	want := []string{"http://localhost:3000", "https://app.example.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected allowed CORS origins %+v, got %+v", want, got)
 	}
 }

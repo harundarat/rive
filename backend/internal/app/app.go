@@ -77,7 +77,16 @@ func Initialize() (*App, error) {
 	)
 
 	//Router
-	router := deliveryhttp.NewRouter(healthHandler, workOrderHandler, quickNodeWebhookHandler, storageHandler, ledgerHandler, nettingHandler, agentHandler)
+	router := deliveryhttp.NewRouter(
+		healthHandler,
+		workOrderHandler,
+		quickNodeWebhookHandler,
+		storageHandler,
+		ledgerHandler,
+		nettingHandler,
+		agentHandler,
+		cfg.AllowedCORSOrigins(),
+	)
 
 	log.Println("Starting application...")
 
