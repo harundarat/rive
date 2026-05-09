@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const batchSettlementWaitTimeout = time.Minute
+const batchSettlementWaitTimeout = 90 * time.Second
 
 func main() {
 	configPath := flag.String("config", "../demo/netting.local.yaml", "path to netting demo YAML config")
