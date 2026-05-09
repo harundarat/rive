@@ -15,7 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const pnlExplorerBaseURL = "https://storagescan.0g.ai/tx/"
+const (
+	pnlExplorerBaseURL      = "https://storagescan.0g.ai/tx/"
+	pnlChainExplorerBaseURL = "https://chainscan.0g.ai/tx/"
+)
 
 type pnlDB interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -199,14 +202,16 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 			audit_batches.source,
 			audit_batches.storage_root_hash,
 			audit_batches.entry_count,
-			audit_batches.anchored_at
+			audit_batches.anchored_at,
+			audit_batches.chain_tx_hash
 		FROM (
 			SELECT
 				netting_batches.id::text AS batch_id,
 				'netting_batch' AS source,
 				netting_batches.batch_hash AS storage_root_hash,
 				COUNT(DISTINCT journal_entries.id)::bigint AS entry_count,
-				netting_batches.updated_at AS anchored_at
+				netting_batches.updated_at AS anchored_at,
+				netting_batches.settlement_tx_hash AS chain_tx_hash
 			FROM ledger_entries
 			INNER JOIN accounts ON accounts.id = ledger_entries.account_id
 			INNER JOIN journal_entries ON journal_entries.id = ledger_entries.journal_entry_id
@@ -216,7 +221,7 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 				AND netting_batches.batch_status = 'settled'
 				AND ($2::timestamptz IS NULL OR ledger_entries.created_at >= $2::timestamptz)
 				AND ledger_entries.created_at < $3::timestamptz
-			GROUP BY netting_batches.id, netting_batches.batch_hash, netting_batches.updated_at
+			GROUP BY netting_batches.id, netting_batches.batch_hash, netting_batches.settlement_tx_hash, netting_batches.updated_at
 
 			UNION ALL
 
@@ -225,8 +230,10 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 				'escrow_event' AS source,
 				journal_entries.storage_cid AS storage_root_hash,
 				1::bigint AS entry_count,
-				journal_entries.created_at AS anchored_at
+				journal_entries.created_at AS anchored_at,
+				COALESCE(work_orders.refund_tx_hash, work_orders.release_tx_hash) AS chain_tx_hash
 			FROM journal_entries
+			LEFT JOIN work_orders ON work_orders.id = journal_entries.work_order_id
 			WHERE journal_entries.netting_batch_id IS NULL
 				AND NULLIF(BTRIM(journal_entries.storage_cid), '') IS NOT NULL
 				AND EXISTS (
@@ -254,18 +261,21 @@ func (r *PnLRepository) fetchPnLAuditBatches(ctx context.Context, agentID uuid.U
 		var storageRootHash pgtype.Text
 		var entryCount int64
 		var anchoredAt time.Time
-		if err := rows.Scan(&batchID, &source, &storageRootHash, &entryCount, &anchoredAt); err != nil {
+		var chainTxHash pgtype.Text
+		if err := rows.Scan(&batchID, &source, &storageRootHash, &entryCount, &anchoredAt, &chainTxHash); err != nil {
 			return nil, fmt.Errorf("scan pnl audit batch: %w", err)
 		}
 
 		hash := nullableTextPointer(storageRootHash)
+		chainHash := nullableTextPointer(chainTxHash)
 		batch := domain.PnLAuditBatch{
-			BatchID:         batchID,
-			Source:          source,
-			StorageRootHash: hash,
-			EntryCount:      entryCount,
-			AnchoredAt:      anchoredAt.UTC().Format(time.RFC3339),
-			ExplorerURL:     pnlExplorerURL(hash),
+			BatchID:          batchID,
+			Source:           source,
+			StorageRootHash:  hash,
+			EntryCount:       entryCount,
+			AnchoredAt:       anchoredAt.UTC().Format(time.RFC3339),
+			ExplorerURL:      pnlExplorerURL(hash),
+			ChainExplorerURL: pnlChainExplorerURL(chainHash),
 		}
 		batches = append(batches, batch)
 	}
@@ -424,5 +434,14 @@ func pnlExplorerURL(hash *string) *string {
 	}
 
 	url := pnlExplorerBaseURL + *hash
+	return &url
+}
+
+func pnlChainExplorerURL(hash *string) *string {
+	if hash == nil {
+		return nil
+	}
+
+	url := pnlChainExplorerBaseURL + *hash
 	return &url
 }

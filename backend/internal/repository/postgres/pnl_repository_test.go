@@ -23,6 +23,11 @@ var (
 	pnlTestPaymentIntentID  = uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a41")
 )
 
+const (
+	pnlTestEscrowChainTxHash  = "0xc1027a6be1b1a8e577438c73293ea5e1a7b5a3de84ec747e48ab0a3072db9245"
+	pnlTestNettingChainTxHash = "0xd1027a6be1b1a8e577438c73293ea5e1a7b5a3de84ec747e48ab0a3072db9245"
+)
+
 type fakePnLSQLOperation struct {
 	sql  string
 	args []any
@@ -212,8 +217,8 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 		}},
 		count: 20,
 		auditRows: &fakePnLRows{rows: [][]any{
-			{pnlTestEscrowJournalID.String(), domain.PnLAuditSourceEscrowEvent, pgtype.Text{String: "0xescrow123", Valid: true}, int64(1), escrowAnchoredAt},
-			{pnlTestBatchID.String(), domain.PnLAuditSourceNettingBatch, pgtype.Text{String: "0xdef456", Valid: true}, int64(8), anchoredAt},
+			{pnlTestEscrowJournalID.String(), domain.PnLAuditSourceEscrowEvent, pgtype.Text{String: "0xescrow123", Valid: true}, int64(1), escrowAnchoredAt, pgtype.Text{String: pnlTestEscrowChainTxHash, Valid: true}},
+			{pnlTestBatchID.String(), domain.PnLAuditSourceNettingBatch, pgtype.Text{String: "0xdef456", Valid: true}, int64(8), anchoredAt, pgtype.Text{String: pnlTestNettingChainTxHash, Valid: true}},
 		}},
 		transactionRows: &fakePnLRows{rows: [][]any{
 			{
@@ -295,6 +300,9 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	if escrowBatch.ExplorerURL == nil || *escrowBatch.ExplorerURL != "https://storagescan.0g.ai/tx/0xescrow123" {
 		t.Fatalf("unexpected escrow explorer URL: %v", escrowBatch.ExplorerURL)
 	}
+	if escrowBatch.ChainExplorerURL == nil || *escrowBatch.ChainExplorerURL != "https://chainscan.0g.ai/tx/"+pnlTestEscrowChainTxHash {
+		t.Fatalf("unexpected escrow chain explorer URL: %v", escrowBatch.ChainExplorerURL)
+	}
 	batch := report.AuditTrail.Batches[1]
 	if batch.BatchID != pnlTestBatchID.String() ||
 		batch.Source != domain.PnLAuditSourceNettingBatch ||
@@ -304,6 +312,9 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 	}
 	if batch.ExplorerURL == nil || *batch.ExplorerURL != "https://storagescan.0g.ai/tx/0xdef456" {
 		t.Fatalf("unexpected explorer URL: %v", batch.ExplorerURL)
+	}
+	if batch.ChainExplorerURL == nil || *batch.ChainExplorerURL != "https://chainscan.0g.ai/tx/"+pnlTestNettingChainTxHash {
+		t.Fatalf("unexpected chain explorer URL: %v", batch.ChainExplorerURL)
 	}
 	if len(report.Transactions) != 2 {
 		t.Fatalf("expected 2 transactions, got %+v", report.Transactions)
@@ -365,6 +376,9 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 		"'netting_batch' AS source",
 		"'escrow_event' AS source",
 		"netting_batches.batch_hash AS storage_root_hash",
+		"netting_batches.settlement_tx_hash AS chain_tx_hash",
+		"LEFT JOIN work_orders ON work_orders.id = journal_entries.work_order_id",
+		"COALESCE(work_orders.refund_tx_hash, work_orders.release_tx_hash) AS chain_tx_hash",
 		"UNION ALL",
 		"journal_entries.netting_batch_id IS NULL",
 		"NULLIF(BTRIM(journal_entries.storage_cid), '') IS NOT NULL",
@@ -385,6 +399,29 @@ func TestPnLRepositoryGetPnLBuildsReportFromRevenueExpenseLedger(t *testing.T) {
 		"ORDER BY ledger_entries.created_at DESC, journal_entries.id, accounts.name, ledger_entries.id",
 	} {
 		assertSQLContains(t, transactionSQL, expected)
+	}
+}
+
+func TestPnLRepositoryFetchAuditBatchesReturnsNilChainExplorerURLForMissingTxHash(t *testing.T) {
+	anchoredAt := time.Date(2026, 4, 23, 9, 0, 0, 0, time.UTC)
+	db := &fakePnLDB{
+		auditRows: &fakePnLRows{rows: [][]any{
+			{pnlTestEscrowJournalID.String(), domain.PnLAuditSourceEscrowEvent, pgtype.Text{String: "0xescrow123", Valid: true}, int64(1), anchoredAt, pgtype.Text{}},
+		}},
+	}
+	repo := &PnLRepository{db: db}
+
+	batches, err := repo.fetchPnLAuditBatches(context.Background(), pnlTestAgentID, domain.PnLReportRequest{
+		To: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("fetchPnLAuditBatches returned error: %v", err)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("expected 1 batch, got %+v", batches)
+	}
+	if batches[0].ChainExplorerURL != nil {
+		t.Fatalf("expected nil chain explorer URL, got %v", batches[0].ChainExplorerURL)
 	}
 }
 

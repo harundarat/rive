@@ -36,6 +36,7 @@ func (uc *fakePnLUsecase) GetPnL(ctx context.Context, walletAddress string, from
 func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 	from := "2026-04-01T00:00:00Z"
 	auditBatchID := "018f95e4-3f8d-7b70-a4dd-2d9a833c4a31"
+	chainExplorerURL := "https://chainscan.0g.ai/tx/0xc1027a6be1b1a8e577438c73293ea5e1a7b5a3de84ec747e48ab0a3072db9245"
 	usecase := &fakePnLUsecase{
 		output: &domain.PnLReport{
 			Agent: domain.PnLAgent{
@@ -85,10 +86,11 @@ func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 				JournalBatchCount: 1,
 				Batches: []domain.PnLAuditBatch{
 					{
-						BatchID:    auditBatchID,
-						Source:     domain.PnLAuditSourceEscrowEvent,
-						EntryCount: 1,
-						AnchoredAt: "2026-04-23T09:00:00Z",
+						BatchID:          auditBatchID,
+						Source:           domain.PnLAuditSourceEscrowEvent,
+						EntryCount:       1,
+						AnchoredAt:       "2026-04-23T09:00:00Z",
+						ChainExplorerURL: &chainExplorerURL,
 					},
 				},
 			},
@@ -138,6 +140,9 @@ func TestLedgerHandlerGetPnLSuccess(t *testing.T) {
 	}
 	if len(body.Data.AuditTrail.Batches) != 1 || body.Data.AuditTrail.Batches[0].Source != domain.PnLAuditSourceEscrowEvent {
 		t.Fatalf("expected audit source, got %+v", body.Data.AuditTrail.Batches)
+	}
+	if body.Data.AuditTrail.Batches[0].ChainExplorerURL == nil || *body.Data.AuditTrail.Batches[0].ChainExplorerURL != chainExplorerURL {
+		t.Fatalf("expected chain explorer URL, got %+v", body.Data.AuditTrail.Batches[0].ChainExplorerURL)
 	}
 }
 

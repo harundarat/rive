@@ -79,12 +79,13 @@ type PnLAuditTrail struct {
 }
 
 type PnLAuditBatch struct {
-	BatchID         string  `json:"batchId"`
-	Source          string  `json:"source"`
-	StorageRootHash *string `json:"storageRootHash"`
-	EntryCount      int64   `json:"entryCount"`
-	AnchoredAt      string  `json:"anchoredAt"`
-	ExplorerURL     *string `json:"explorerUrl"`
+	BatchID          string  `json:"batchId"`
+	Source           string  `json:"source"`
+	StorageRootHash  *string `json:"storageRootHash"`
+	EntryCount       int64   `json:"entryCount"`
+	AnchoredAt       string  `json:"anchoredAt"`
+	ExplorerURL      *string `json:"explorerUrl"`
+	ChainExplorerURL *string `json:"chainExplorerUrl"`
 }
 
 type PnLTransaction struct {

@@ -388,17 +388,19 @@ func (r *WorkOrderRepository) RecordOrderReleased(ctx context.Context, event dom
 			SET
 				status = $1,
 				completed_at = $2,
+				release_tx_hash = $3,
 				updated_at = $2
 			FROM agents payee
-			WHERE work_orders.onchain_order_id = $3::numeric
-				AND work_orders.amount = $4::numeric
-				AND work_orders.status = $5
+			WHERE work_orders.onchain_order_id = $4::numeric
+				AND work_orders.amount = $5::numeric
+				AND work_orders.status = $6
 				AND payee.id = work_orders.provider_id
-				AND LOWER(payee.wallet_address) = LOWER($6)
+				AND LOWER(payee.wallet_address) = LOWER($7)
 			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
 		`,
 			string(domain.WorkOrderStatusCompleted),
 			event.RecordedAt,
+			event.TransactionHash,
 			event.OnchainOrderID.String(),
 			event.Amount.String(),
 			string(domain.WorkOrderStatusFunded),
@@ -464,6 +466,7 @@ func (r *WorkOrderRepository) RollbackOrderReleased(ctx context.Context, event d
 			SET
 				status = $1,
 				completed_at = NULL,
+				release_tx_hash = NULL,
 				updated_at = $2
 			FROM agents payee
 			WHERE work_orders.onchain_order_id = $3::numeric
@@ -540,17 +543,19 @@ func (r *WorkOrderRepository) RecordOrderRefunded(ctx context.Context, event dom
 			SET
 				status = $1,
 				refunded_at = $2,
+				refund_tx_hash = $3,
 				updated_at = $2
 			FROM agents payer
-			WHERE work_orders.onchain_order_id = $3::numeric
-				AND work_orders.amount = $4::numeric
-				AND work_orders.status = $5
+			WHERE work_orders.onchain_order_id = $4::numeric
+				AND work_orders.amount = $5::numeric
+				AND work_orders.status = $6
 				AND payer.id = work_orders.creator_id
-				AND LOWER(payer.wallet_address) = LOWER($6)
+				AND LOWER(payer.wallet_address) = LOWER($7)
 			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
 		`,
 			string(domain.WorkOrderStatusRefunded),
 			event.RecordedAt,
+			event.TransactionHash,
 			event.OnchainOrderID.String(),
 			event.Amount.String(),
 			string(domain.WorkOrderStatusFunded),
@@ -604,6 +609,7 @@ func (r *WorkOrderRepository) RollbackOrderRefunded(ctx context.Context, event d
 			SET
 				status = $1,
 				refunded_at = NULL,
+				refund_tx_hash = NULL,
 				updated_at = $2
 			FROM agents payer
 			WHERE work_orders.onchain_order_id = $3::numeric

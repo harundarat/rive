@@ -16,6 +16,8 @@
         refunded_at TIMESTAMPTZ,
         onchain_order_id NUMERIC(78,0) UNIQUE,
         order_tx_hash CHAR(66) CHECK (order_tx_hash ~ '^0x[0-9a-fA-F]{64}$'),
+        release_tx_hash CHAR(66) CHECK (release_tx_hash ~ '^0x[0-9a-fA-F]{64}$'),
+        refund_tx_hash CHAR(66) CHECK (refund_tx_hash ~ '^0x[0-9a-fA-F]{64}$'),
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );

@@ -328,12 +328,14 @@ func TestWorkOrderRepositoryRecordOrderReleasedSetsCompletedStatusAndPayeePredic
 	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	recordedAt := time.Date(2026, 4, 22, 11, 0, 0, 0, time.UTC)
+	releaseTxHash := "0xc1027a6be1b1a8e577438c73293ea5e1a7b5a3de84ec747e48ab0a3072db9245"
 
 	updated, err := repo.RecordOrderReleased(context.Background(), domain.OrderReleasedWorkOrderUpdate{
-		Payee:          "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934",
-		Amount:         bigIntFromStringForRepositoryTest("1000000"),
-		OnchainOrderID: largeOrderID,
-		RecordedAt:     recordedAt,
+		Payee:           "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934",
+		Amount:          bigIntFromStringForRepositoryTest("1000000"),
+		OnchainOrderID:  largeOrderID,
+		TransactionHash: releaseTxHash,
+		RecordedAt:      recordedAt,
 	})
 	if err != nil {
 		t.Fatalf("RecordOrderReleased returned error: %v", err)
@@ -346,11 +348,12 @@ func TestWorkOrderRepositoryRecordOrderReleasedSetsCompletedStatusAndPayeePredic
 	for _, expected := range []string{
 		"status = $1",
 		"completed_at = $2",
+		"release_tx_hash = $3",
 		"updated_at = $2",
-		"work_orders.onchain_order_id = $3::numeric",
-		"work_orders.amount = $4::numeric",
+		"work_orders.onchain_order_id = $4::numeric",
+		"work_orders.amount = $5::numeric",
 		"payee.id = work_orders.provider_id",
-		"LOWER(payee.wallet_address) = LOWER($6)",
+		"LOWER(payee.wallet_address) = LOWER($7)",
 		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
 		if !strings.Contains(updateOp.sql, expected) {
@@ -360,10 +363,11 @@ func TestWorkOrderRepositoryRecordOrderReleasedSetsCompletedStatusAndPayeePredic
 
 	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusCompleted))
 	assertArg(t, updateOp.args, 1, recordedAt)
-	assertArg(t, updateOp.args, 2, largeOrderID.String())
-	assertArg(t, updateOp.args, 3, "1000000")
-	assertArg(t, updateOp.args, 4, string(domain.WorkOrderStatusFunded))
-	assertArg(t, updateOp.args, 5, "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934")
+	assertArg(t, updateOp.args, 2, releaseTxHash)
+	assertArg(t, updateOp.args, 3, largeOrderID.String())
+	assertArg(t, updateOp.args, 4, "1000000")
+	assertArg(t, updateOp.args, 5, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 6, "0x933A54D5D7A6C0c9E6318395A74CB99aC1C56934")
 }
 
 func TestWorkOrderRepositoryRollbackOrderReleasedRestoresFundedStatus(t *testing.T) {
@@ -389,6 +393,7 @@ func TestWorkOrderRepositoryRollbackOrderReleasedRestoresFundedStatus(t *testing
 	for _, expected := range []string{
 		"status = $1",
 		"completed_at = NULL",
+		"release_tx_hash = NULL",
 		"updated_at = $2",
 		"work_orders.status = $5",
 		"payee.id = work_orders.provider_id",
@@ -412,12 +417,14 @@ func TestWorkOrderRepositoryRecordOrderRefundedSetsRefundedStatusAndPayerPredica
 	repo := newEventWorkOrderRepository(db)
 	largeOrderID := bigIntFromStringForRepositoryTest("1606938044258990275541962092341162602522202993782792835301376")
 	recordedAt := time.Date(2026, 4, 22, 11, 10, 0, 0, time.UTC)
+	refundTxHash := "0xe1027a6be1b1a8e577438c73293ea5e1a7b5a3de84ec747e48ab0a3072db9245"
 
 	updated, err := repo.RecordOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderUpdate{
-		Payer:          "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
-		Amount:         bigIntFromStringForRepositoryTest("1000000"),
-		OnchainOrderID: largeOrderID,
-		RecordedAt:     recordedAt,
+		Payer:           "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73",
+		Amount:          bigIntFromStringForRepositoryTest("1000000"),
+		OnchainOrderID:  largeOrderID,
+		TransactionHash: refundTxHash,
+		RecordedAt:      recordedAt,
 	})
 	if err != nil {
 		t.Fatalf("RecordOrderRefunded returned error: %v", err)
@@ -430,11 +437,12 @@ func TestWorkOrderRepositoryRecordOrderRefundedSetsRefundedStatusAndPayerPredica
 	for _, expected := range []string{
 		"status = $1",
 		"refunded_at = $2",
+		"refund_tx_hash = $3",
 		"updated_at = $2",
-		"work_orders.onchain_order_id = $3::numeric",
-		"work_orders.amount = $4::numeric",
+		"work_orders.onchain_order_id = $4::numeric",
+		"work_orders.amount = $5::numeric",
 		"payer.id = work_orders.creator_id",
-		"LOWER(payer.wallet_address) = LOWER($6)",
+		"LOWER(payer.wallet_address) = LOWER($7)",
 		"RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id",
 	} {
 		if !strings.Contains(updateOp.sql, expected) {
@@ -444,10 +452,11 @@ func TestWorkOrderRepositoryRecordOrderRefundedSetsRefundedStatusAndPayerPredica
 
 	assertArg(t, updateOp.args, 0, string(domain.WorkOrderStatusRefunded))
 	assertArg(t, updateOp.args, 1, recordedAt)
-	assertArg(t, updateOp.args, 2, largeOrderID.String())
-	assertArg(t, updateOp.args, 3, "1000000")
-	assertArg(t, updateOp.args, 4, string(domain.WorkOrderStatusFunded))
-	assertArg(t, updateOp.args, 5, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
+	assertArg(t, updateOp.args, 2, refundTxHash)
+	assertArg(t, updateOp.args, 3, largeOrderID.String())
+	assertArg(t, updateOp.args, 4, "1000000")
+	assertArg(t, updateOp.args, 5, string(domain.WorkOrderStatusFunded))
+	assertArg(t, updateOp.args, 6, "0x26DEa28e89dFdF4CD5Ab9f63010bB46316EC3A73")
 }
 
 func TestWorkOrderRepositoryRollbackOrderRefundedRestoresFundedStatus(t *testing.T) {
@@ -473,6 +482,7 @@ func TestWorkOrderRepositoryRollbackOrderRefundedRestoresFundedStatus(t *testing
 	for _, expected := range []string{
 		"status = $1",
 		"refunded_at = NULL",
+		"refund_tx_hash = NULL",
 		"updated_at = $2",
 		"work_orders.status = $5",
 		"payer.id = work_orders.creator_id",
