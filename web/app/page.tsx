@@ -21,14 +21,14 @@ function Nav() {
           <a href="#protocol">Protocol</a>
           <a href="#flow">How it works</a>
           <a href="#contracts">Contracts</a>
-          <a href="#dashboard">Dashboard</a>
+          <a href="/dashboard">Dashboard</a>
           <a href="#docs">Docs</a>
         </div>
         <div className="nav-cta">
           <a className="btn btn-ghost" href="#github">
             GitHub ↗
           </a>
-          <a className="btn btn-primary" href="#dashboard">
+          <a className="btn btn-primary" href="/dashboard">
             Open dashboard
           </a>
         </div>
@@ -96,7 +96,7 @@ function Hero() {
       <div className="wrap">
         <div className="hero-eyebrow">
           <span className="pulse"></span>
-          <span className="label label-ink">LIVE ON 0G MAINNET · V0.4.0</span>
+          <span className="label label-ink">LIVE ON 0G MAINNET · V1.0</span>
         </div>
         <div className="hero-grid">
           <div>
@@ -110,7 +110,7 @@ function Hero() {
               gas-optimized batch settlements for autonomous agents.
             </p>
             <div className="hero-ctas">
-              <a className="btn btn-primary" href="#dashboard">
+              <a className="btn btn-primary" href="/dashboard">
                 Open dashboard <span className="btn-arrow">→</span>
               </a>
               <a className="btn btn-ghost" href="#docs">
@@ -503,7 +503,7 @@ function CTA() {
           settlements out of the box. Open spec, open contracts.
         </p>
         <div className="actions">
-          <a className="btn btn-primary" href="#dashboard">
+          <a className="btn btn-primary" href="/dashboard">
             Open the dashboard <span className="btn-arrow">→</span>
           </a>
           <a className="btn btn-ghost" href="#github">
