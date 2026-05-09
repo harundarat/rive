@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const batchSettlementWaitTimeout = time.Minute
+
 func main() {
 	configPath := flag.String("config", "../demo/netting.local.yaml", "path to netting demo YAML config")
 	flag.Parse()
@@ -57,6 +59,7 @@ func run(ctx context.Context, configPath string) error {
 	fmt.Printf("Expected gross volume: %s rUSD\n", formatTokenAmount(summary.GrossAmount, cfg.TokenDecimals))
 	fmt.Printf("Expected net amount: %s rUSD\n\n", formatTokenAmount(summary.NetAmount, cfg.TokenDecimals))
 
+	printSectionHeader(1, 4, "Setup")
 	api := newAPIClient(cfg.APIBaseURL)
 	fmt.Println("Checking backend health...")
 	if err := api.checkHealth(ctx); err != nil {
@@ -79,6 +82,8 @@ func run(ctx context.Context, configPath string) error {
 		return err
 	}
 
+	fmt.Println()
+	printSectionHeader(2, 4, "Funding agents")
 	chain, err := newChainClient(ctx, cfg)
 	if err != nil {
 		return err
@@ -101,7 +106,9 @@ func run(ctx context.Context, configPath string) error {
 		}
 	}
 
-	fmt.Println("\nSubmitting payment intents...")
+	fmt.Println()
+	printSectionHeader(3, 4, "Submitting payment intents")
+	fmt.Println("Submitting payment intents...")
 	for i, intent := range cfg.Intents {
 		payer := cfg.agentByName[strings.TrimSpace(intent.Payer)]
 		payee := cfg.agentByName[strings.TrimSpace(intent.Payee)]
@@ -119,15 +126,35 @@ func run(ctx context.Context, configPath string) error {
 		fmt.Printf("  %02d. %s -> %s : %s rUSD\n", i+1, intent.Payer, intent.Payee, formatTokenAmount(mustBigInt(intent.Amount), cfg.TokenDecimals))
 	}
 
-	timeout := time.Duration(cfg.PollTimeoutSeconds) * time.Second
-	fmt.Printf("\nWaiting up to %s for netting batch settlement...\n", timeout)
-	batch, err := pollBatchSettlement(ctx, db, runID, len(cfg.Intents), timeout)
+	fmt.Println()
+	printSectionHeader(4, 4, "Batch settlement")
+	batch, err := pollBatchSettlementWithCountdown(ctx, db, runID, len(cfg.Intents), batchSettlementWaitTimeout)
 	if err != nil {
 		return err
+	}
+	if batch.SettlementTxHash != nil {
+		fmt.Printf("  Settlement tx: %s\n", *batch.SettlementTxHash)
+		printOnChainProof(cfg.ExplorerTxBaseURL, *batch.SettlementTxHash)
 	}
 
 	printSummary(cfg, runID, summary, batch)
 	return nil
+}
+
+func printSectionHeader(index int, total int, name string) {
+	fmt.Printf("=== [%d/%d] %s ===\n", index, total, name)
+}
+
+func printOnChainProof(explorerTxBaseURL string, txHash string) {
+	fmt.Printf("  🔗 ON-CHAIN PROOF → %s\n", explorerTxURL(explorerTxBaseURL, txHash))
+}
+
+func explorerTxURL(explorerTxBaseURL string, txHash string) string {
+	if strings.TrimSpace(explorerTxBaseURL) == "" {
+		return txHash
+	}
+
+	return strings.TrimRight(explorerTxBaseURL, "/") + "/" + txHash
 }
 
 func printSummary(cfg *demoConfig, runID string, summary *demoSummary, batch *batchResult) {

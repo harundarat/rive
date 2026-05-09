@@ -56,6 +56,7 @@ func run(ctx context.Context, configPath string) error {
 	fmt.Printf("Payee: %s (%s)\n", cfg.payeeRuntime.Config.Name, cfg.payeeRuntime.Address.Hex())
 	fmt.Printf("Amount: %s rUSD\n\n", formatTokenAmount(amount, cfg.TokenDecimals))
 
+	printSectionHeader(1, 4, "Setup")
 	api := newAPIClient(cfg.APIBaseURL)
 	fmt.Println("Checking backend health...")
 	if err := api.checkHealth(ctx); err != nil {
@@ -87,12 +88,14 @@ func run(ctx context.Context, configPath string) error {
 		return err
 	}
 
+	fmt.Println()
+	printSectionHeader(2, 4, "Funding escrow")
 	fmt.Println("Preparing rUSD balance and escrow allowance...")
 	if err := chain.ensurePayerTokenReady(ctx, cfg.payerRuntime, amount, mintBuffer, cfg.TokenDecimals); err != nil {
 		return err
 	}
 
-	fmt.Println("\nCreating work order in backend...")
+	fmt.Println("Creating work order in backend...")
 	workOrderRequest := cfg.workOrderRequest(runID)
 	workOrder, err := api.createWorkOrder(ctx, workOrderRequest)
 	if err != nil {
@@ -102,7 +105,7 @@ func run(ctx context.Context, configPath string) error {
 	fmt.Printf("  spec hash: %s\n", workOrder.RootHash)
 	fmt.Printf("  spec upload tx: %s\n", workOrder.TxHash)
 
-	fmt.Println("\nCreating and funding escrow order on-chain...")
+	fmt.Println("Creating and funding escrow order on-chain...")
 	orderID, createTxHash, createReceipt, err := chain.createOrder(ctx, cfg.payerRuntime, cfg.payeeRuntime.Address, amount, workOrder.RootHash)
 	if err != nil {
 		return err
@@ -110,6 +113,7 @@ func run(ctx context.Context, configPath string) error {
 	onchainOrderID := orderID.String()
 	fmt.Printf("  on-chain order id: %s\n", onchainOrderID)
 	fmt.Printf("  createOrder tx: %s\n", createTxHash)
+	printOnChainProof(cfg.ExplorerTxBaseURL, createTxHash)
 
 	fmt.Println("Relaying OrderCreated receipt to backend webhook...")
 	if err := relayReceipt(ctx, api, cfg.QuickNodeWebhookSecret, createReceipt); err != nil {
@@ -120,7 +124,9 @@ func run(ctx context.Context, configPath string) error {
 	}
 	fmt.Println("  backend status: funded")
 
-	fmt.Println("\nUploading delivery payload to 0G Storage...")
+	fmt.Println()
+	printSectionHeader(3, 4, "Delivery")
+	fmt.Println("Uploading delivery payload to 0G Storage...")
 	deliveryPayload := cfg.deliveryPayload(onchainOrderID)
 	upload, err := api.uploadDelivery(ctx, deliveryPayload)
 	if err != nil {
@@ -139,12 +145,15 @@ func run(ctx context.Context, configPath string) error {
 	}
 	fmt.Println("  delivery accepted")
 
-	fmt.Println("\nReleasing escrow order on-chain...")
+	fmt.Println()
+	printSectionHeader(4, 4, "Release")
+	fmt.Println("Releasing escrow order on-chain...")
 	releaseTxHash, releaseReceipt, err := chain.releaseOrder(ctx, cfg.payerRuntime, orderID)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("  releaseOrder tx: %s\n", releaseTxHash)
+	printOnChainProof(cfg.ExplorerTxBaseURL, releaseTxHash)
 
 	fmt.Println("Relaying OrderReleased receipt to backend webhook...")
 	if err := relayReceipt(ctx, api, cfg.QuickNodeWebhookSecret, releaseReceipt); err != nil {
@@ -158,6 +167,22 @@ func run(ctx context.Context, configPath string) error {
 
 	printSummary(cfg, runID, amount, workOrder, upload, finalStatus, onchainOrderID, createTxHash, releaseTxHash)
 	return nil
+}
+
+func printSectionHeader(index int, total int, name string) {
+	fmt.Printf("=== [%d/%d] %s ===\n", index, total, name)
+}
+
+func printOnChainProof(explorerTxBaseURL string, txHash string) {
+	fmt.Printf("  🔗 ON-CHAIN PROOF → %s\n", explorerTxURL(explorerTxBaseURL, txHash))
+}
+
+func explorerTxURL(explorerTxBaseURL string, txHash string) string {
+	if strings.TrimSpace(explorerTxBaseURL) == "" {
+		return txHash
+	}
+
+	return strings.TrimRight(explorerTxBaseURL, "/") + "/" + txHash
 }
 
 func relayReceipt(ctx context.Context, api *apiClient, secret string, receipt *types.Receipt) error {

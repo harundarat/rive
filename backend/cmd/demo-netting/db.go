@@ -24,6 +24,11 @@ type batchResult struct {
 	NetAmount               *big.Int
 }
 
+type batchSettlementPollResult struct {
+	batch *batchResult
+	err   error
+}
+
 func openDB(ctx context.Context, cfg *demoConfig) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(ctx, cfg.Database.dsn())
 	if err != nil {
@@ -85,6 +90,93 @@ func ensureNoPendingNetting(ctx context.Context, db *pgxpool.Pool) error {
 	}
 
 	return nil
+}
+
+func pollBatchSettlementWithCountdown(ctx context.Context, db *pgxpool.Pool, runID string, expectedIntentCount int, timeout time.Duration) (*batchResult, error) {
+	pollCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	resultCh := make(chan batchSettlementPollResult, 1)
+	go func() {
+		batch, err := pollBatchSettlement(pollCtx, db, runID, expectedIntentCount, timeout)
+		resultCh <- batchSettlementPollResult{batch: batch, err: err}
+	}()
+
+	startedAt := time.Now()
+	maxLineLen := renderBatchSettlementCountdown(startedAt, timeout)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case result := <-resultCh:
+			clearBatchSettlementCountdown(maxLineLen)
+			return result.batch, result.err
+		case <-ticker.C:
+			lineLen := renderBatchSettlementCountdown(startedAt, timeout)
+			if lineLen > maxLineLen {
+				maxLineLen = lineLen
+			}
+		case <-ctx.Done():
+			clearBatchSettlementCountdown(maxLineLen)
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func renderBatchSettlementCountdown(startedAt time.Time, timeout time.Duration) int {
+	line := batchSettlementCountdownLine(startedAt, timeout)
+	fmt.Printf("\r%s", line)
+	return len(line)
+}
+
+func clearBatchSettlementCountdown(lineLen int) {
+	if lineLen <= 0 {
+		fmt.Print("\r")
+		return
+	}
+
+	fmt.Printf("\r%s\r", strings.Repeat(" ", lineLen))
+}
+
+func batchSettlementCountdownLine(startedAt time.Time, timeout time.Duration) string {
+	const barWidth = 12
+
+	elapsed := time.Since(startedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed > timeout {
+		elapsed = timeout
+	}
+
+	filled := 0
+	if timeout > 0 {
+		filled = int(float64(elapsed) / float64(timeout) * float64(barWidth))
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > barWidth {
+		filled = barWidth
+	}
+
+	return fmt.Sprintf(
+		"Waiting for batch settlement [%s%s] %s / %s",
+		strings.Repeat("#", filled),
+		strings.Repeat(".", barWidth-filled),
+		formatCountdownDuration(elapsed),
+		formatCountdownDuration(timeout),
+	)
+}
+
+func formatCountdownDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+
+	totalSeconds := int(duration / time.Second)
+	return fmt.Sprintf("%d:%02d", totalSeconds/60, totalSeconds%60)
 }
 
 func pollBatchSettlement(ctx context.Context, db *pgxpool.Pool, runID string, expectedIntentCount int, timeout time.Duration) (*batchResult, error) {
