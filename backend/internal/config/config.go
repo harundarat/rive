@@ -20,6 +20,7 @@ type DatabaseConfig struct {
 	Name         string `mapstructure:"DB_NAME"`
 	SSLMode      string `mapstructure:"DB_SSLMODE"`
 	SSLRootCert  string `mapstructure:"DB_SSLROOTCERT"`
+	SSLCACert    string `mapstructure:"DB_SSL_CA"` // PEM content as env var, alternative to SSLRootCert file
 	MaxIdleConns int    `mapstructure:"DB_MAX_IDLE_CONN"`
 	MaxOpenConns int    `mapstructure:"DB_MAX_OPEN_CONN"`
 }
@@ -43,8 +44,12 @@ func (d *DatabaseConfig) buildURL(scheme string) string {
 
 	q := u.Query()
 	q.Set("sslmode", d.SSLMode)
-	if sslRootCert := strings.TrimSpace(d.SSLRootCert); sslRootCert != "" {
-		q.Set("sslrootcert", sslRootCert)
+	// When DB_SSL_CA is set, the caller injects the cert via TLS config directly;
+	// omit sslrootcert so pgx does not try to open a file that doesn't exist.
+	if strings.TrimSpace(d.SSLCACert) == "" {
+		if sslRootCert := strings.TrimSpace(d.SSLRootCert); sslRootCert != "" {
+			q.Set("sslrootcert", sslRootCert)
+		}
 	}
 	u.RawQuery = q.Encode()
 
@@ -86,7 +91,7 @@ func Load() (*Config, error) {
 
 	for _, key := range []string{
 		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
-		"DB_SSLMODE", "DB_SSLROOTCERT",
+		"DB_SSLMODE", "DB_SSLROOTCERT", "DB_SSL_CA",
 		"DB_MAX_IDLE_CONN", "DB_MAX_OPEN_CONN",
 		"ZG_EVM_RPC", "ZG_STORAGE_INDEXER_RPC", "ZG_PRIVATE_KEY",
 		"QUICKNODE_WEBHOOK_SECRET", "ESCROW_CONTRACT_ADDRESS",
