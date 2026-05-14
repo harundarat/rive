@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { AuditTrailData, AuditBatch } from "./types";
 import { fmtTime } from "./data";
 import { Icon } from "./icons";
@@ -17,12 +18,57 @@ function AuditSourceBadge({ source }: { source: string }) {
 
 function BatchCard({ batch, index, total }: { batch: AuditBatch; index: number; total: number }) {
   const hasStorageRoot = Boolean(batch.storageRootHash);
-  const hasStorageProof = Boolean(batch.storageRootHash && batch.explorerUrl);
+  const [loadingProof, setLoadingProof] = useState(false);
 
   function copyHash() {
     if (!batch.storageRootHash) return;
     navigator.clipboard.writeText(batch.storageRootHash);
     window.dispatchEvent(new CustomEvent("rive-toast", { detail: "Hash copied" }));
+  }
+
+  async function openStorageProof(rootHash: string) {
+    if (loadingProof) return;
+    setLoadingProof(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(
+        `https://storagescan.0g.ai/api/txs?rootHash=${encodeURIComponent(rootHash)}`,
+        { signal: controller.signal, headers: { Accept: "application/json" } },
+      );
+      const body = (await response.json()) as {
+        data?: { list?: Array<{ txSeq?: number }> };
+      };
+      const txSeq = body?.data?.list?.[0]?.txSeq;
+      if (typeof txSeq === "number") {
+        window.open(
+          `https://storagescan.0g.ai/submission/${txSeq}`,
+          "_blank",
+          "noopener,noreferrer",
+        );
+      } else {
+        window.open(
+          `https://storagescan.0g.ai/?q=${encodeURIComponent(rootHash)}`,
+          "_blank",
+          "noopener,noreferrer",
+        );
+        window.dispatchEvent(
+          new CustomEvent("rive-toast", {
+            detail: "Storage proof not indexed yet — opened search",
+          }),
+        );
+      }
+    } catch (err) {
+      console.error("Failed to resolve storage proof", err);
+      window.dispatchEvent(
+        new CustomEvent("rive-toast", {
+          detail: "Could not resolve storage proof. Try again.",
+        }),
+      );
+    } finally {
+      clearTimeout(timeoutId);
+      setLoadingProof(false);
+    }
   }
 
   return (
@@ -63,10 +109,16 @@ function BatchCard({ batch, index, total }: { batch: AuditBatch; index: number; 
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch" }}>
-        {hasStorageProof ? (
-          <a className="db-btn db-btn-glass" href={batch.explorerUrl || undefined} target="_blank" rel="noopener noreferrer" style={{ justifyContent: "center" }}>
-            Storage proof <Icon.arrow />
-          </a>
+        {batch.storageRootHash ? (
+          <button
+            type="button"
+            className="db-btn db-btn-glass"
+            style={{ justifyContent: "center" }}
+            disabled={loadingProof}
+            onClick={() => openStorageProof(batch.storageRootHash!)}
+          >
+            {loadingProof ? "Loading…" : <>Storage proof <Icon.arrow /></>}
+          </button>
         ) : (
           <span className="db-btn db-btn-glass db-btn-disabled" style={{ justifyContent: "center" }}>
             Storage proof unavailable
