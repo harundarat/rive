@@ -10,7 +10,7 @@ This file covers the Go backend in `backend/`. The repo also contains `web/` (Ne
 
 Run all from `backend/` (this directory). Go module path: `github.com/harundarat/rive/backend`.
 
-- Run the API server: `go run ./cmd/api` (listens on `:8080`, requires `.env`)
+- Run the API server: `go run ./cmd/api` (listens on `:8080`, reads `.env` if present, otherwise uses system env vars)
 - Build: `go build ./...`
 - Vet: `go vet ./...`
 - All tests: `go test ./...`
@@ -26,7 +26,7 @@ Demo CLIs (end-to-end smoke flows that exercise a running API + on-chain contrac
 
 ## Configuration
 
-`config.Load()` reads `.env` from the **current working directory** via Viper, then `AutomaticEnv()`. Run commands from `backend/` so the `.env` is found, or set env vars directly. See `.env.example` for the full set; required groups:
+`config.Load()` loads `.env` from the **current working directory** if present, then falls back to system environment variables (each key is bound via `viper.BindEnv`). The `.env` file is optional — required keys can come from either source, which makes deployment to containerized/PaaS environments straightforward. A malformed `.env` still fails startup (fail-fast), only "file not found" is tolerated. See `.env.example` for the full set; required groups:
 - `DB_*` — Postgres / CockroachDB connection. SSL is on by default (`DB_SSLMODE=verify-full` + `DB_SSLROOTCERT=./ca.pem`).
 - `ZG_EVM_RPC`, `ZG_STORAGE_INDEXER_RPC`, `ZG_PRIVATE_KEY` — 0G storage + EVM access.
 - `QUICKNODE_WEBHOOK_SECRET`, `ESCROW_CONTRACT_ADDRESS` — incoming on-chain event webhook.

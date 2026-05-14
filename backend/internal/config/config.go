@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -82,14 +84,28 @@ func Load() (*Config, error) {
 	viper.SetConfigType("env")
 	viper.AutomaticEnv()
 
-	err := viper.ReadInConfig()
-	if err != nil {
-		return nil, err
+	for _, key := range []string{
+		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
+		"DB_SSLMODE", "DB_SSLROOTCERT",
+		"DB_MAX_IDLE_CONN", "DB_MAX_OPEN_CONN",
+		"ZG_EVM_RPC", "ZG_STORAGE_INDEXER_RPC", "ZG_PRIVATE_KEY",
+		"QUICKNODE_WEBHOOK_SECRET", "ESCROW_CONTRACT_ADDRESS",
+		"NETTING_SETTLEMENT_ADDRESS", "NETTING_SETTLER_PRIVATE_KEY",
+		"NETTING_WINDOW_SECONDS",
+		"CORS_ALLOWED_ORIGINS",
+	} {
+		_ = viper.BindEnv(key)
+	}
+
+	if err := viper.ReadInConfig(); err != nil {
+		var notFoundErr viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFoundErr) && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("failed to read .env: %w", err)
+		}
 	}
 
 	var config Config
-	err = viper.Unmarshal(&config)
-	if err != nil {
+	if err := viper.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
