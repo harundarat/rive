@@ -8,11 +8,11 @@
 [![Made with Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.33-363636?logo=solidity)](https://soliditylang.org)
 
-| | |
-| --- | --- |
-| 🌐 **Live site** | <!-- TODO: https://riveprotocol.tech --> |
-| 🎬 **Demo video** | <!-- TODO: video URL --> |
-| 🔍 **0G Explorer** | https://chainscan.0g.ai |
+|                    |                                             |
+| ------------------ | ------------------------------------------- |
+| 🌐 **Live site**   | https://www.riveprotocol.tech               |
+| 🎬 **Demo video**  | https://www.youtube.com/watch?v=Dk71vqM9bo0 |
+| 🔍 **0G Explorer** | https://chainscan.0g.ai                     |
 
 ---
 
@@ -32,18 +32,18 @@
 
 ## 2. 0G Integration
 
-| 0G Component | How Rive uses it |
-| --- | --- |
-| **0G Chain** | Hosts `Escrow.sol`, `NettingSettlement.sol`, and `RiveUSD.sol` (test stable). The settler EOA submits batched netting transactions; agents sign their own escrow funding and delivery proofs. |
-| **0G Storage** | Stores work-order specs, per-event escrow journal entries, and netting batch manifests as canonical JSON (RFC 8785). The Merkle root (`specHash`) is pinned on-chain. Client: [`backend/internal/infrastructure/storage/zerog.go`](./backend/internal/infrastructure/storage/zerog.go) using `github.com/0gfoundation/0g-storage-client`. |
-| **0G Agent ID** *(lightweight V1)* | Each agent has a stable `agent_id_0g` string (e.g. `rive-demo-scout`) plus an EVM signing address, persisted in the Postgres `agents` table and mirrored on-chain via the agent registry. ERC-7857 iNFT integration is planned for V2. |
+| 0G Component                       | How Rive uses it                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0G Chain**                       | Hosts `Escrow.sol`, `NettingSettlement.sol`, and `RiveUSD.sol` (test stable). The settler EOA submits batched netting transactions; agents sign their own escrow funding and delivery proofs.                                                                                                                                             |
+| **0G Storage**                     | Stores work-order specs, per-event escrow journal entries, and netting batch manifests as canonical JSON (RFC 8785). The Merkle root (`specHash`) is pinned on-chain. Client: [`backend/internal/infrastructure/storage/zerog.go`](./backend/internal/infrastructure/storage/zerog.go) using `github.com/0gfoundation/0g-storage-client`. |
+| **0G Agent ID** _(lightweight V1)_ | Each agent has a stable `agent_id_0g` string (e.g. `rive-demo-scout`) plus an EVM signing address, persisted in the Postgres `agents` table and mirrored on-chain via the agent registry. ERC-7857 iNFT integration is planned for V2.                                                                                                    |
 
 ### Deployed contracts — 0G Mainnet (Chain ID 16661)
 
-| Contract | Address | Explorer |
-| --- | --- | --- |
-| RiveUSD (rUSD) | `0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0` | [chainscan.0g.ai](https://chainscan.0g.ai/address/0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0) |
-| Escrow | `0xe3de5a57b960aeaa4d1d01b46665599067476b6d` | [chainscan.0g.ai](https://chainscan.0g.ai/address/0xe3de5a57b960aeaa4d1d01b46665599067476b6d) |
+| Contract          | Address                                      | Explorer                                                                                      |
+| ----------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| RiveUSD (rUSD)    | `0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0` | [chainscan.0g.ai](https://chainscan.0g.ai/address/0xB053E106D5236e4c4cD1b7DA0aC51bA0B318C7a0) |
+| Escrow            | `0xe3de5a57b960aeaa4d1d01b46665599067476b6d` | [chainscan.0g.ai](https://chainscan.0g.ai/address/0xe3de5a57b960aeaa4d1d01b46665599067476b6d) |
 | NettingSettlement | `0x59Ecf1AD6e755CBE71aac6DfAf1b2Dba9E148b98` | [chainscan.0g.ai](https://chainscan.0g.ai/address/0x59Ecf1AD6e755CBE71aac6DfAf1b2Dba9E148b98) |
 
 RPC endpoint: `https://evmrpc.0g.ai` · Storage indexer: configured via `ZG_STORAGE_INDEXER_RPC`.
@@ -53,16 +53,17 @@ RPC endpoint: `https://evmrpc.0g.ai` · Storage indexer: configured via `ZG_STOR
 ## 3. Architecture
 
 <!-- TODO: render and commit ./docs/architecture.png -->
+
 ![Rive Protocol architecture](./docs/architecture.png)
 
 **Stack**
 
-| Layer | Tech |
-| --- | --- |
-| Backend | Go 1.26, chi v5 router, pgx → PostgreSQL. Strict Clean Architecture: `cmd → app → delivery → usecase ← domain ← repository ← infrastructure`. |
-| Smart contracts | Solidity 0.8.33 + Foundry. OpenZeppelin `SafeERC20` + `ReentrancyGuard`. |
-| Frontend | Next.js 16 + React 19 + TypeScript + Tailwind 4 (in [`web/`](./web)). |
-| Off-chain plumbing | QuickNode webhooks → escrow event ingestion (HMAC-SHA256 verified). Goose migrations on Postgres. |
+| Layer              | Tech                                                                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend            | Go 1.26, chi v5 router, pgx → PostgreSQL. Strict Clean Architecture: `cmd → app → delivery → usecase ← domain ← repository ← infrastructure`. |
+| Smart contracts    | Solidity 0.8.33 + Foundry. OpenZeppelin `SafeERC20` + `ReentrancyGuard`.                                                                      |
+| Frontend           | Next.js 16 + React 19 + TypeScript + Tailwind 4 (in [`web/`](./web)).                                                                         |
+| Off-chain plumbing | QuickNode webhooks → escrow event ingestion (HMAC-SHA256 verified). Goose migrations on Postgres.                                             |
 
 **Trust model.** The backend never holds an agent's private key. Agents sign their own escrow funding and delivery proofs (`deliver:<orderID>:<deliveryHash>`, ECDSA recovery). The backend holds exactly one signing key — `NETTING_SETTLER_PRIVATE_KEY` — used to call the permissioned `settleBatch()` function. Even that call cannot move funds unilaterally: `settleBatch` uses `transferFrom`, so each debtor agent must have explicitly approved `NettingSettlement` for the relevant amount before settlement.
 
@@ -117,17 +118,17 @@ cp contracts/.env.example contracts/.env
 
 Key variables to fill in `backend/.env`:
 
-| Variable | Purpose |
-| --- | --- |
-| `ZG_EVM_RPC` | `https://evmrpc.0g.ai` |
-| `ZG_STORAGE_INDEXER_RPC` | 0G Storage indexer endpoint |
-| `DB_*` | Postgres connection (host / port / user / password / name) |
-| `ESCROW_CONTRACT_ADDRESS` | See deployed contracts table above |
-| `NETTING_SETTLEMENT_ADDRESS` | See deployed contracts table above |
-| `NETTING_SETTLER_PRIVATE_KEY` | Backend's settler EOA (only key the backend holds) |
-| `NETTING_WINDOW_SECONDS` | Batch close interval (5 for demo, 60 default) |
-| `QUICKNODE_WEBHOOK_SECRET` | HMAC secret for webhook verification |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated origins for the dashboard |
+| Variable                      | Purpose                                                    |
+| ----------------------------- | ---------------------------------------------------------- |
+| `ZG_EVM_RPC`                  | `https://evmrpc.0g.ai`                                     |
+| `ZG_STORAGE_INDEXER_RPC`      | 0G Storage indexer endpoint                                |
+| `DB_*`                        | Postgres connection (host / port / user / password / name) |
+| `ESCROW_CONTRACT_ADDRESS`     | See deployed contracts table above                         |
+| `NETTING_SETTLEMENT_ADDRESS`  | See deployed contracts table above                         |
+| `NETTING_SETTLER_PRIVATE_KEY` | Backend's settler EOA (only key the backend holds)         |
+| `NETTING_WINDOW_SECONDS`      | Batch close interval (5 for demo, 60 default)              |
+| `QUICKNODE_WEBHOOK_SECRET`    | HMAC secret for webhook verification                       |
+| `CORS_ALLOWED_ORIGINS`        | Comma-separated origins for the dashboard                  |
 
 ### 3. Create local demo configs
 
