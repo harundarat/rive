@@ -52,9 +52,31 @@ RPC endpoint: `https://evmrpc.0g.ai` · Storage indexer: configured via `ZG_STOR
 
 ## 3. Architecture
 
-<!-- TODO: render and commit ./docs/architecture.png -->
-
-![Rive Protocol architecture](./docs/architecture.png)
+```text
+                          ┌──────────────────┐
+                          │      Agents      │
+                          │  (EOA wallets,   │
+                          │   sign proofs)   │
+                          └────────┬─────────┘
+                                   │ HTTP API + signed proofs
+                                   ▼
+       ┌────────────────────────────────────────────────────────┐
+       │              Rive Backend (Go, port :8080)             │
+       │   work-orders · netting engine · double-entry ledger   │
+       │   ┌──────────────────────────────────────────────────┐ │
+       │   │  PostgreSQL — journal, intents, orders, batches  │ │
+       │   └──────────────────────────────────────────────────┘ │
+       └────────┬───────────────────────────────────┬───────────┘
+                │ Canonical JSON                    │ settleBatch() /
+                │ + Merkle roots                    │ delivery proofs
+                ▼                                   ▼
+         ┌──────────────┐                      ┌─────────────────────┐
+         │  0G Storage  │◀────── pin hash ────▶│      0G Chain       │
+         │  specs,      │                      │  Escrow.sol         │
+         │  journals,   │                      │  NettingSettlement  │
+         │  manifests   │                      │  RiveUSD.sol        │
+         └──────────────┘                      └─────────────────────┘
+```
 
 **Stack**
 
@@ -65,11 +87,46 @@ RPC endpoint: `https://evmrpc.0g.ai` · Storage indexer: configured via `ZG_STOR
 | Frontend           | Next.js 16 + React 19 + TypeScript + Tailwind 4 (in [`web/`](./web)).                                                                         |
 | Off-chain plumbing | QuickNode webhooks → escrow event ingestion (HMAC-SHA256 verified). Goose migrations on Postgres.                                             |
 
-**Trust model.** The backend never holds an agent's private key. Agents sign their own escrow funding and delivery proofs (`deliver:<orderID>:<deliveryHash>`, ECDSA recovery). The backend holds exactly one signing key — `NETTING_SETTLER_PRIVATE_KEY` — used to call the permissioned `settleBatch()` function. Even that call cannot move funds unilaterally: `settleBatch` uses `transferFrom`, so each debtor agent must have explicitly approved `NettingSettlement` for the relevant amount before settlement.
+---
+
+## 4. Trust Model
+
+The Rive backend **never** holds an agent's private key for escrow operations.
+
+- **Agents sign their own proofs** — escrow funding (`transferFrom` from the agent's wallet) and delivery proofs (`deliver:<orderID>:<deliveryHash>`, verified via ECDSA recovery).
+- **The backend holds exactly one signing key** — `NETTING_SETTLER_PRIVATE_KEY`, used only to call the permissioned `settleBatch()` function.
+- **Even `settleBatch` cannot move funds unilaterally** — it uses `transferFrom`, so each debtor agent must have explicitly `approve()`d `NettingSettlement` for the relevant amount before settlement.
 
 ---
 
-## 4. Repository Structure
+## 5. API Reference
+
+Every agent wallet must be registered once before it can create work orders or submit payment intents. The demo CLIs (`make demo-escrow` / `make demo-netting`) handle this automatically via direct DB seeding. When integrating directly against the API, call the onboard endpoint first:
+
+```bash
+curl -X POST http://localhost:8080/api/agents/onboard \
+  -H "Content-Type: application/json" \
+  -d '{"wallet_address": "0xYOUR_AGENT_WALLET"}'
+# → 201 Created  { "id": "...", "wallet_address": "0x...", "agent_id_0g": null, ... }
+```
+
+Full endpoint reference:
+
+| Method | Endpoint                                     | Description                                                          |
+| ------ | -------------------------------------------- | -------------------------------------------------------------------- |
+| `POST` | `/api/agents/onboard`                        | **Register an agent wallet** — prerequisite for all write operations |
+| `POST` | `/api/work-orders`                           | Create a work order and pin spec to 0G Storage                       |
+| `GET`  | `/api/work-orders/{onchainOrderID}`          | Fetch work order status                                              |
+| `POST` | `/api/work-orders/{onchainOrderID}/delivery` | Submit a signed delivery proof                                       |
+| `POST` | `/api/payments/intent`                       | Submit a payment intent (netting flow)                               |
+| `GET`  | `/api/ledger/{walletAddress}/pnl`            | Get agent PnL report from the double-entry ledger                    |
+| `POST` | `/api/storage/upload`                        | Upload an arbitrary payload to 0G Storage                            |
+| `POST` | `/api/webhooks/quicknode/escrow-events`      | QuickNode webhook for on-chain escrow event ingestion                |
+| `GET`  | `/api/health/`                               | Health check                                                         |
+
+---
+
+## 6. Repository Structure
 
 ```
 rive/
@@ -88,7 +145,16 @@ rive/
 
 ---
 
-## 5. Quick Start for Reviewers
+## 7. Quick Start for Reviewers
+
+> **TL;DR for reviewers** — once `.env` files and `demo/*.local.yaml` are filled in (see steps 2-3):
+>
+> ```bash
+> make demo-escrow     # 1 escrow lifecycle end-to-end
+> make demo-netting    # 20 intents → 1 settleBatch() tx
+> ```
+>
+> Full setup details below.
 
 ### Prerequisites
 
@@ -139,6 +205,8 @@ cp demo/netting.example.yaml demo/netting.local.yaml
 
 Fill in `private_key` for each agent. Every agent wallet needs a small amount of native 0G for gas (the demo CLI auto-mints test rUSD if an agent's balance is below the required volume).
 
+> **Agent registration:** The demo CLIs automatically register each configured wallet into the database at startup — no manual step required. If you are calling the API directly (outside of the demo CLIs), register each agent wallet first via `POST /api/agents/onboard` before creating work orders or submitting payment intents (see [API Reference](#5-api-reference) above).
+
 ### 4. Migrate database & run backend
 
 ```bash
@@ -170,7 +238,7 @@ Each demo prints the on-chain settlement transaction along with its 0G Explorer 
 
 ---
 
-## 6. Demo Flow
+## 8. Demo Flow
 
 ### Escrow demo — `make demo-escrow`
 
@@ -202,11 +270,9 @@ Result:
 
 The CLI polls Postgres until the batch is settled and prints the settlement tx hash with its 0G Explorer URL.
 
-🎬 Demo video: <!-- TODO: link -->
-
 ---
 
-## 7. Roadmap
+## 9. Roadmap
 
 **V2**
 
@@ -223,8 +289,6 @@ The CLI polls Postgres until the batch is settled and prints the settlement tx h
 
 ---
 
-## 8. License & Contact
-
-**License:** MIT <!-- TODO: add LICENSE file at root -->
+## 10. Contact
 
 Built by **Harun** ([@harundarat](https://github.com/harundarat)) for the **0G APAC Hackathon 2026 — Track 3**.
