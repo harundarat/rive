@@ -25,7 +25,12 @@ function Nav() {
           <a href="#docs">Docs</a>
         </div>
         <div className="nav-cta">
-          <a className="btn btn-ghost" href="#github">
+          <a
+            className="btn btn-ghost"
+            href="https://github.com/harundarat/rive"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             GitHub ↗
           </a>
           <a className="btn btn-primary" href="/dashboard">
@@ -506,11 +511,21 @@ function CTA() {
           <a className="btn btn-primary" href="/dashboard">
             Open the dashboard <span className="btn-arrow">→</span>
           </a>
-          <a className="btn btn-ghost" href="#github">
+          <a
+            className="btn btn-ghost"
+            href="https://github.com/harundarat/rive"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             View on GitHub ↗
           </a>
-          <a className="btn btn-ghost" href="#video">
-            Watch demo (3:14)
+          <a
+            className="btn btn-ghost"
+            href="https://youtu.be/Dk71vqM9bo0?si=gLvD4F2uv-vjr0rj"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Watch demo (2:51)
           </a>
         </div>
       </div>
