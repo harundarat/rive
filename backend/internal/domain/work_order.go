@@ -1,0 +1,136 @@
+package domain
+
+import (
+	"context"
+	"math/big"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type WorkOrderStatus string
+
+const (
+	WorkOrderStatusDraft     WorkOrderStatus = "draft"
+	WorkOrderStatusFunded    WorkOrderStatus = "funded"
+	WorkOrderStatusCompleted WorkOrderStatus = "completed"
+	WorkOrderStatusRefunded  WorkOrderStatus = "refunded"
+)
+
+type WorkOrder struct {
+	ID             uuid.UUID       `json:"id"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	CreatorID      uuid.UUID       `json:"creator_id"`
+	ProviderID     uuid.UUID       `json:"provider_id"`
+	Amount         big.Int         `json:"amount"`
+	Status         WorkOrderStatus `json:"status"`
+	SpecHash       string          `json:"spec_hash"`
+	SpecVersion    string          `json:"spec_version"`
+	SpecTxHash     string          `json:"spec_tx_hash"`
+	DeliverableCID *string         `json:"deliverable_cid"`
+	DeliveredAt    *time.Time      `json:"delivered_at"`
+	CompletedAt    *time.Time      `json:"completed_at"`
+	RefundedAt     *time.Time      `json:"refunded_at"`
+	OnchainOrderID *big.Int        `json:"onchain_order_id"`
+	OrderTxHash    *string         `json:"order_tx_hash"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+type OrderCreatedWorkOrderUpdate struct {
+	SpecHash        string
+	Payer           string
+	Payee           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RecordedAt      time.Time
+}
+
+type OrderCreatedWorkOrderRollback struct {
+	SpecHash        string
+	Payer           string
+	Payee           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RolledBackAt    time.Time
+}
+
+type OrderReleasedWorkOrderUpdate struct {
+	Payee           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RecordedAt      time.Time
+}
+
+type OrderReleasedWorkOrderRollback struct {
+	Payee           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RolledBackAt    time.Time
+}
+
+type OrderRefundedWorkOrderUpdate struct {
+	Payer           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RecordedAt      time.Time
+}
+
+type OrderRefundedWorkOrderRollback struct {
+	Payer           string
+	Amount          big.Int
+	OnchainOrderID  big.Int
+	TransactionHash string
+	BlockNumber     string
+	LogIndex        string
+	RolledBackAt    time.Time
+}
+
+type WorkOrderDeliveryTarget struct {
+	WorkOrder WorkOrder
+	Payee     string
+}
+
+type WorkOrderDeliveryUpdate struct {
+	OnchainOrderID big.Int
+	DeliveryHash   string
+	DeliveredAt    time.Time
+}
+
+type WorkOrderRepository interface {
+	FindByIdempotencyKey(ctx context.Context, idempotencyKey string) (*WorkOrder, error)
+	FindByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*WorkOrder, error)
+	FindDeliveryTargetByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*WorkOrderDeliveryTarget, error)
+	Create(ctx context.Context, workOrder WorkOrder) error
+	SubmitDelivery(ctx context.Context, update WorkOrderDeliveryUpdate) (bool, error)
+	RecordOrderCreated(ctx context.Context, event OrderCreatedWorkOrderUpdate) (bool, error)
+	RollbackOrderCreated(ctx context.Context, event OrderCreatedWorkOrderRollback) (bool, error)
+	RecordOrderReleased(ctx context.Context, event OrderReleasedWorkOrderUpdate) (bool, error)
+	RollbackOrderReleased(ctx context.Context, event OrderReleasedWorkOrderRollback) (bool, error)
+	RecordOrderRefunded(ctx context.Context, event OrderRefundedWorkOrderUpdate) (bool, error)
+	RollbackOrderRefunded(ctx context.Context, event OrderRefundedWorkOrderRollback) (bool, error)
+}
+
+type WorkOrderOnchainEventUsecase interface {
+	RecordOrderCreated(ctx context.Context, event OrderCreatedWorkOrderUpdate) (bool, error)
+	RollbackOrderCreated(ctx context.Context, event OrderCreatedWorkOrderRollback) (bool, error)
+	RecordOrderReleased(ctx context.Context, event OrderReleasedWorkOrderUpdate) (bool, error)
+	RollbackOrderReleased(ctx context.Context, event OrderReleasedWorkOrderRollback) (bool, error)
+	RecordOrderRefunded(ctx context.Context, event OrderRefundedWorkOrderUpdate) (bool, error)
+	RollbackOrderRefunded(ctx context.Context, event OrderRefundedWorkOrderRollback) (bool, error)
+}

@@ -1,0 +1,58 @@
+api_base_url: "http://localhost:8080/api"
+rpc_url: "https://evmrpc.0g.ai"
+explorer_tx_base_url: "https://chainscan.0g.ai/tx/"
+poll_timeout_seconds: 90
+token_decimals: 18
+minimum_native_balance_wei: "1000000000000000"
+mint_buffer_amount: "10000000000000000000"
+quicknode_webhook_secret: "REPLACE_WITH_BACKEND_QUICKNODE_WEBHOOK_SECRET"
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "rive"
+  password: "rive"
+  name: "rive"
+  sslmode: "disable"
+  sslrootcert: ""
+
+contracts:
+  rusd: "0x0000000000000000000000000000000000000000"
+  escrow: "0x0000000000000000000000000000000000000000"
+
+payer:
+  name: "requester"
+  private_key: "0xREPLACE_WITH_PAYER_PRIVATE_KEY"
+  agent_id_0g: "rive-demo-escrow-requester"
+  metadata_cid: "demo-agent-escrow-requester"
+
+payee:
+  name: "worker"
+  private_key: "0xREPLACE_WITH_PAYEE_PRIVATE_KEY"
+  agent_id_0g: "rive-demo-escrow-worker"
+  metadata_cid: "demo-agent-escrow-worker"
+
+work_order:
+  amount: "10000000000000000000"
+  asset: "rUSD"
+  chain: "0g-mainnet"
+  task:
+    title: "Generate cleaned review dataset"
+    description: "Payee creates a JSON dataset that satisfies the acceptance criteria."
+    category: "data-processing"
+  deliverable:
+    format: "json"
+    submission:
+      method: "rive-storage"
+      endpoint: "/api/storage/upload"
+  acceptance_criteria:
+    - id: "ac1"
+      description: "Delivery is valid JSON and includes one completed sample output item."
+  deadline: "2026-12-31T23:59:59Z"
+
+delivery_payload:
+  result:
+    status: "completed"
+    items:
+      - id: "item-1"
+        value: "sample output"
