@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,13 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
-
-const (
-	accountNameEscrowLocked   = "escrow_locked"
-	accountNameEscrowPending  = "escrow_pending"
-	accountNameServiceExpense = "Service Expense"
-	accountNameServiceRevenue = "Service Revenue"
 )
 
 type workOrderExecutor interface {
@@ -32,10 +24,6 @@ type workOrderDB interface {
 	workOrderExecutor
 }
 
-type workOrderStorageUploader interface {
-	UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error)
-}
-
 type workOrderTx interface {
 	workOrderExecutor
 	Commit(ctx context.Context) error
@@ -43,16 +31,14 @@ type workOrderTx interface {
 }
 
 type WorkOrderRepository struct {
-	db              workOrderDB
-	storageUploader workOrderStorageUploader
-	beginTx         func(ctx context.Context) (workOrderTx, error)
-	newID           func() (uuid.UUID, error)
+	db      workOrderDB
+	beginTx func(ctx context.Context) (workOrderTx, error)
+	newID   func() (uuid.UUID, error)
 }
 
-func NewWorkOrderRepository(db *pgxpool.Pool, storageUploader workOrderStorageUploader) *WorkOrderRepository {
+func NewWorkOrderRepository(db *pgxpool.Pool) *WorkOrderRepository {
 	return &WorkOrderRepository{
-		db:              db,
-		storageUploader: storageUploader,
+		db: db,
 		beginTx: func(ctx context.Context) (workOrderTx, error) {
 			tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 			if err != nil {
@@ -239,474 +225,333 @@ func (r *WorkOrderRepository) SubmitDelivery(ctx context.Context, update domain.
 	return commandTag.RowsAffected() > 0, nil
 }
 
-func (r *WorkOrderRepository) RecordOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (bool, error) {
+// ResolveOrderCreatedTarget matches an OrderCreated event against a draft work order
+// and its counterparties, without mutating any row. It is read-only and holds no
+// transaction, so the journal upload it precedes never blocks a DB connection.
+func (r *WorkOrderRepository) ResolveOrderCreatedTarget(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
+		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
+		FROM work_orders
+		INNER JOIN agents payer ON payer.id = work_orders.creator_id
+		INNER JOIN agents payee ON payee.id = work_orders.provider_id
+		WHERE work_orders.spec_hash = $1
+			AND work_orders.amount = $2::numeric
+			AND work_orders.status = $3
+			AND LOWER(payer.wallet_address) = LOWER($4)
+			AND LOWER(payee.wallet_address) = LOWER($5)
+	`,
+		event.SpecHash,
+		event.Amount.String(),
+		string(domain.WorkOrderStatusDraft),
+		event.Payer,
+		event.Payee,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve order created target: %w", err)
+	}
+
+	return target, matched, nil
+}
+
+func (r *WorkOrderRepository) ApplyOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
 	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		target, err := scanWorkOrderBookkeepingTarget(tx.QueryRow(ctx, `
+		matched, err := r.transition(ctx, tx, `
 			UPDATE work_orders
 			SET
 				status = $1,
-				onchain_order_id = $3::numeric,
-				order_tx_hash = $4,
-				updated_at = $2
-			FROM agents payer, agents payee
-			WHERE work_orders.spec_hash = $5
-				AND work_orders.amount = $6::numeric
-				AND work_orders.status = $7
-				AND payer.id = work_orders.creator_id
-				AND payee.id = work_orders.provider_id
-				AND LOWER(payer.wallet_address) = LOWER($8)
-				AND LOWER(payee.wallet_address) = LOWER($9)
-			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
+				onchain_order_id = $2::numeric,
+				order_tx_hash = $3,
+				updated_at = $4
+			WHERE id = $5
+				AND status = $6
 		`,
 			string(domain.WorkOrderStatusFunded),
-			event.RecordedAt,
 			event.OnchainOrderID.String(),
 			event.TransactionHash,
-			event.SpecHash,
-			event.Amount.String(),
+			event.RecordedAt,
+			entry.WorkOrderID,
 			string(domain.WorkOrderStatusDraft),
-			event.Payer,
-			event.Payee,
-		))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
+		)
+		if err != nil || !matched {
 			return false, err
 		}
 
-		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
-			WorkOrderID:    target.WorkOrderID,
-			CreatedAt:      event.RecordedAt,
-			Amount:         event.Amount,
-			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_created", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
-			Description:    fmt.Sprintf("Escrow order created for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []ledgerPosting{
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameEscrowLocked,
-					AccountType: domain.AccountTypeAsset,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameEscrowPending,
-					AccountType: domain.AccountTypeLiability,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-			},
-		})
-		if err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return true, r.persistEscrowJournal(ctx, tx, entry)
 	})
 	if err != nil {
-		return false, fmt.Errorf("record order created: %w", err)
+		return false, fmt.Errorf("apply order created: %w", err)
 	}
 
 	return updated, nil
 }
 
-func (r *WorkOrderRepository) RollbackOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderRollback) (bool, error) {
+func (r *WorkOrderRepository) ResolveOrderCreatedRollbackTarget(ctx context.Context, event domain.OrderCreatedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
+		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
+		FROM work_orders
+		INNER JOIN agents payer ON payer.id = work_orders.creator_id
+		INNER JOIN agents payee ON payee.id = work_orders.provider_id
+		WHERE work_orders.spec_hash = $1
+			AND work_orders.amount = $2::numeric
+			AND work_orders.onchain_order_id = $3::numeric
+			AND work_orders.order_tx_hash = $4
+			AND work_orders.status = $5
+			AND LOWER(payer.wallet_address) = LOWER($6)
+			AND LOWER(payee.wallet_address) = LOWER($7)
+	`,
+		event.SpecHash,
+		event.Amount.String(),
+		event.OnchainOrderID.String(),
+		event.TransactionHash,
+		string(domain.WorkOrderStatusFunded),
+		event.Payer,
+		event.Payee,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve order created rollback target: %w", err)
+	}
+
+	return target, matched, nil
+}
+
+func (r *WorkOrderRepository) ApplyOrderCreatedRollback(ctx context.Context, event domain.OrderCreatedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
 	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		target, err := scanWorkOrderBookkeepingTarget(tx.QueryRow(ctx, `
+		matched, err := r.transition(ctx, tx, `
 			UPDATE work_orders
 			SET
 				status = $1,
 				onchain_order_id = NULL,
 				order_tx_hash = NULL,
 				updated_at = $2
-			FROM agents payer, agents payee
-			WHERE work_orders.spec_hash = $3
-				AND work_orders.amount = $4::numeric
-				AND work_orders.onchain_order_id = $5::numeric
-				AND work_orders.order_tx_hash = $6
-				AND work_orders.status = $7
-				AND payer.id = work_orders.creator_id
-				AND payee.id = work_orders.provider_id
-				AND LOWER(payer.wallet_address) = LOWER($8)
-				AND LOWER(payee.wallet_address) = LOWER($9)
-			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
+			WHERE id = $3
+				AND status = $4
 		`,
 			string(domain.WorkOrderStatusDraft),
 			event.RolledBackAt,
-			event.SpecHash,
-			event.Amount.String(),
-			event.OnchainOrderID.String(),
-			event.TransactionHash,
+			entry.WorkOrderID,
 			string(domain.WorkOrderStatusFunded),
-			event.Payer,
-			event.Payee,
-		))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
+		)
+		if err != nil || !matched {
 			return false, err
 		}
 
-		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
-			WorkOrderID:    target.WorkOrderID,
-			CreatedAt:      event.RolledBackAt,
-			Amount:         event.Amount,
-			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_created_rollback", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
-			Description:    fmt.Sprintf("Escrow order created rollback for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []ledgerPosting{
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameEscrowPending,
-					AccountType: domain.AccountTypeLiability,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameEscrowLocked,
-					AccountType: domain.AccountTypeAsset,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-			},
-		})
-		if err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return true, r.persistEscrowJournal(ctx, tx, entry)
 	})
 	if err != nil {
-		return false, fmt.Errorf("rollback order created: %w", err)
+		return false, fmt.Errorf("apply order created rollback: %w", err)
 	}
 
 	return updated, nil
 }
 
-func (r *WorkOrderRepository) RecordOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate) (bool, error) {
+func (r *WorkOrderRepository) ResolveOrderReleasedTarget(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
+		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
+		FROM work_orders
+		INNER JOIN agents payee ON payee.id = work_orders.provider_id
+		WHERE work_orders.onchain_order_id = $1::numeric
+			AND work_orders.amount = $2::numeric
+			AND work_orders.status = $3
+			AND LOWER(payee.wallet_address) = LOWER($4)
+	`,
+		event.OnchainOrderID.String(),
+		event.Amount.String(),
+		string(domain.WorkOrderStatusFunded),
+		event.Payee,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve order released target: %w", err)
+	}
+
+	return target, matched, nil
+}
+
+func (r *WorkOrderRepository) ApplyOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
 	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		target, err := scanWorkOrderBookkeepingTarget(tx.QueryRow(ctx, `
+		matched, err := r.transition(ctx, tx, `
 			UPDATE work_orders
 			SET
 				status = $1,
 				completed_at = $2,
 				release_tx_hash = $3,
 				updated_at = $2
-			FROM agents payee
-			WHERE work_orders.onchain_order_id = $4::numeric
-				AND work_orders.amount = $5::numeric
-				AND work_orders.status = $6
-				AND payee.id = work_orders.provider_id
-				AND LOWER(payee.wallet_address) = LOWER($7)
-			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
+			WHERE id = $4
+				AND status = $5
 		`,
 			string(domain.WorkOrderStatusCompleted),
 			event.RecordedAt,
 			event.TransactionHash,
-			event.OnchainOrderID.String(),
-			event.Amount.String(),
+			entry.WorkOrderID,
 			string(domain.WorkOrderStatusFunded),
-			event.Payee,
-		))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
+		)
+		if err != nil || !matched {
 			return false, err
 		}
 
-		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
-			WorkOrderID:    target.WorkOrderID,
-			CreatedAt:      event.RecordedAt,
-			Amount:         event.Amount,
-			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_released", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
-			Description:    fmt.Sprintf("Escrow order released for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []ledgerPosting{
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameEscrowPending,
-					AccountType: domain.AccountTypeLiability,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameEscrowLocked,
-					AccountType: domain.AccountTypeAsset,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameServiceExpense,
-					AccountType: domain.AccountTypeExpense,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameServiceRevenue,
-					AccountType: domain.AccountTypeRevenue,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-			},
-		})
-		if err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return true, r.persistEscrowJournal(ctx, tx, entry)
 	})
 	if err != nil {
-		return false, fmt.Errorf("record order released: %w", err)
+		return false, fmt.Errorf("apply order released: %w", err)
 	}
 
 	return updated, nil
 }
 
-func (r *WorkOrderRepository) RollbackOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderRollback) (bool, error) {
+func (r *WorkOrderRepository) ResolveOrderReleasedRollbackTarget(ctx context.Context, event domain.OrderReleasedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
+		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
+		FROM work_orders
+		INNER JOIN agents payee ON payee.id = work_orders.provider_id
+		WHERE work_orders.onchain_order_id = $1::numeric
+			AND work_orders.amount = $2::numeric
+			AND work_orders.status = $3
+			AND LOWER(payee.wallet_address) = LOWER($4)
+	`,
+		event.OnchainOrderID.String(),
+		event.Amount.String(),
+		string(domain.WorkOrderStatusCompleted),
+		event.Payee,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve order released rollback target: %w", err)
+	}
+
+	return target, matched, nil
+}
+
+func (r *WorkOrderRepository) ApplyOrderReleasedRollback(ctx context.Context, event domain.OrderReleasedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
 	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		target, err := scanWorkOrderBookkeepingTarget(tx.QueryRow(ctx, `
+		matched, err := r.transition(ctx, tx, `
 			UPDATE work_orders
 			SET
 				status = $1,
 				completed_at = NULL,
 				release_tx_hash = NULL,
 				updated_at = $2
-			FROM agents payee
-			WHERE work_orders.onchain_order_id = $3::numeric
-				AND work_orders.amount = $4::numeric
-				AND work_orders.status = $5
-				AND payee.id = work_orders.provider_id
-				AND LOWER(payee.wallet_address) = LOWER($6)
-			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
+			WHERE id = $3
+				AND status = $4
 		`,
 			string(domain.WorkOrderStatusFunded),
 			event.RolledBackAt,
-			event.OnchainOrderID.String(),
-			event.Amount.String(),
+			entry.WorkOrderID,
 			string(domain.WorkOrderStatusCompleted),
-			event.Payee,
-		))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
+		)
+		if err != nil || !matched {
 			return false, err
 		}
 
-		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
-			WorkOrderID:    target.WorkOrderID,
-			CreatedAt:      event.RolledBackAt,
-			Amount:         event.Amount,
-			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_released_rollback", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
-			Description:    fmt.Sprintf("Escrow order released rollback for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []ledgerPosting{
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameEscrowLocked,
-					AccountType: domain.AccountTypeAsset,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameEscrowPending,
-					AccountType: domain.AccountTypeLiability,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameServiceRevenue,
-					AccountType: domain.AccountTypeRevenue,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameServiceExpense,
-					AccountType: domain.AccountTypeExpense,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-			},
-		})
-		if err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return true, r.persistEscrowJournal(ctx, tx, entry)
 	})
 	if err != nil {
-		return false, fmt.Errorf("rollback order released: %w", err)
+		return false, fmt.Errorf("apply order released rollback: %w", err)
 	}
 
 	return updated, nil
 }
 
-func (r *WorkOrderRepository) RecordOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate) (bool, error) {
+func (r *WorkOrderRepository) ResolveOrderRefundedTarget(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
+		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
+		FROM work_orders
+		INNER JOIN agents payer ON payer.id = work_orders.creator_id
+		WHERE work_orders.onchain_order_id = $1::numeric
+			AND work_orders.amount = $2::numeric
+			AND work_orders.status = $3
+			AND LOWER(payer.wallet_address) = LOWER($4)
+	`,
+		event.OnchainOrderID.String(),
+		event.Amount.String(),
+		string(domain.WorkOrderStatusFunded),
+		event.Payer,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve order refunded target: %w", err)
+	}
+
+	return target, matched, nil
+}
+
+func (r *WorkOrderRepository) ApplyOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
 	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		target, err := scanWorkOrderBookkeepingTarget(tx.QueryRow(ctx, `
+		matched, err := r.transition(ctx, tx, `
 			UPDATE work_orders
 			SET
 				status = $1,
 				refunded_at = $2,
 				refund_tx_hash = $3,
 				updated_at = $2
-			FROM agents payer
-			WHERE work_orders.onchain_order_id = $4::numeric
-				AND work_orders.amount = $5::numeric
-				AND work_orders.status = $6
-				AND payer.id = work_orders.creator_id
-				AND LOWER(payer.wallet_address) = LOWER($7)
-			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
+			WHERE id = $4
+				AND status = $5
 		`,
 			string(domain.WorkOrderStatusRefunded),
 			event.RecordedAt,
 			event.TransactionHash,
-			event.OnchainOrderID.String(),
-			event.Amount.String(),
+			entry.WorkOrderID,
 			string(domain.WorkOrderStatusFunded),
-			event.Payer,
-		))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
+		)
+		if err != nil || !matched {
 			return false, err
 		}
 
-		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
-			WorkOrderID:    target.WorkOrderID,
-			CreatedAt:      event.RecordedAt,
-			Amount:         event.Amount,
-			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_refunded", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
-			Description:    fmt.Sprintf("Escrow order refunded for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []ledgerPosting{
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameEscrowPending,
-					AccountType: domain.AccountTypeLiability,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameEscrowLocked,
-					AccountType: domain.AccountTypeAsset,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-			},
-		})
-		if err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return true, r.persistEscrowJournal(ctx, tx, entry)
 	})
 	if err != nil {
-		return false, fmt.Errorf("record order refunded: %w", err)
+		return false, fmt.Errorf("apply order refunded: %w", err)
 	}
 
 	return updated, nil
 }
 
-func (r *WorkOrderRepository) RollbackOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderRollback) (bool, error) {
+func (r *WorkOrderRepository) ResolveOrderRefundedRollbackTarget(ctx context.Context, event domain.OrderRefundedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
+		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
+		FROM work_orders
+		INNER JOIN agents payer ON payer.id = work_orders.creator_id
+		WHERE work_orders.onchain_order_id = $1::numeric
+			AND work_orders.amount = $2::numeric
+			AND work_orders.status = $3
+			AND LOWER(payer.wallet_address) = LOWER($4)
+	`,
+		event.OnchainOrderID.String(),
+		event.Amount.String(),
+		string(domain.WorkOrderStatusRefunded),
+		event.Payer,
+	))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve order refunded rollback target: %w", err)
+	}
+
+	return target, matched, nil
+}
+
+func (r *WorkOrderRepository) ApplyOrderRefundedRollback(ctx context.Context, event domain.OrderRefundedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
 	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		target, err := scanWorkOrderBookkeepingTarget(tx.QueryRow(ctx, `
+		matched, err := r.transition(ctx, tx, `
 			UPDATE work_orders
 			SET
 				status = $1,
 				refunded_at = NULL,
 				refund_tx_hash = NULL,
 				updated_at = $2
-			FROM agents payer
-			WHERE work_orders.onchain_order_id = $3::numeric
-				AND work_orders.amount = $4::numeric
-				AND work_orders.status = $5
-				AND payer.id = work_orders.creator_id
-				AND LOWER(payer.wallet_address) = LOWER($6)
-			RETURNING work_orders.id, work_orders.creator_id, work_orders.provider_id
+			WHERE id = $3
+				AND status = $4
 		`,
 			string(domain.WorkOrderStatusFunded),
 			event.RolledBackAt,
-			event.OnchainOrderID.String(),
-			event.Amount.String(),
+			entry.WorkOrderID,
 			string(domain.WorkOrderStatusRefunded),
-			event.Payer,
-		))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
+		)
+		if err != nil || !matched {
 			return false, err
 		}
 
-		err = r.recordBookkeeping(ctx, tx, bookkeepingEntry{
-			WorkOrderID:    target.WorkOrderID,
-			CreatedAt:      event.RolledBackAt,
-			Amount:         event.Amount,
-			IdempotencyKey: escrowJournalKey(target.WorkOrderID, "order_refunded_rollback", event.TransactionHash, event.BlockNumber, event.LogIndex, event.OnchainOrderID),
-			Description:    fmt.Sprintf("Escrow order refunded rollback for on-chain order %s", event.OnchainOrderID.String()),
-			Postings: []ledgerPosting{
-				{
-					AgentID:     target.PayerID,
-					AccountName: accountNameEscrowLocked,
-					AccountType: domain.AccountTypeAsset,
-					EntryType:   domain.LedgerEntryTypeDebit,
-				},
-				{
-					AgentID:     target.PayeeID,
-					AccountName: accountNameEscrowPending,
-					AccountType: domain.AccountTypeLiability,
-					EntryType:   domain.LedgerEntryTypeCredit,
-				},
-			},
-		})
-		if err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return true, r.persistEscrowJournal(ctx, tx, entry)
 	})
 	if err != nil {
-		return false, fmt.Errorf("rollback order refunded: %w", err)
+		return false, fmt.Errorf("apply order refunded rollback: %w", err)
 	}
 
 	return updated, nil
-}
-
-type workOrderBookkeepingTarget struct {
-	WorkOrderID uuid.UUID
-	PayerID     uuid.UUID
-	PayeeID     uuid.UUID
-}
-
-type bookkeepingEntry struct {
-	WorkOrderID    uuid.UUID
-	IdempotencyKey string
-	Description    string
-	CreatedAt      time.Time
-	Amount         big.Int
-	Postings       []ledgerPosting
-}
-
-type ledgerPosting struct {
-	AgentID     uuid.UUID
-	AccountName string
-	AccountType domain.AccountType
-	EntryType   domain.LedgerEntryType
-	Amount      big.Int
-}
-
-type bookkeepingJournalAnchor struct {
-	SchemaVersion  string                            `json:"schema_version"`
-	Kind           string                            `json:"kind"`
-	JournalEntryID uuid.UUID                         `json:"journal_entry_id"`
-	IdempotencyKey string                            `json:"idempotency_key"`
-	WorkOrderID    uuid.UUID                         `json:"work_order_id"`
-	Description    string                            `json:"description"`
-	CreatedAt      string                            `json:"created_at"`
-	Postings       []bookkeepingJournalAnchorPosting `json:"postings"`
-}
-
-type bookkeepingJournalAnchorPosting struct {
-	AccountName string                 `json:"account_name"`
-	AccountType domain.AccountType     `json:"account_type"`
-	EntryType   domain.LedgerEntryType `json:"entry_type"`
-	Amount      string                 `json:"amount"`
-	AgentID     uuid.UUID              `json:"agent_id"`
 }
 
 func (r *WorkOrderRepository) withTx(ctx context.Context, fn func(tx workOrderTx) (bool, error)) (updated bool, err error) {
@@ -739,18 +584,22 @@ func (r *WorkOrderRepository) begin(ctx context.Context) (workOrderTx, error) {
 	return nil, errors.New("transaction support is not configured")
 }
 
-func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrderTx, entry bookkeepingEntry) error {
-	journalID, err := r.nextID()
+// transition runs a guarded UPDATE that flips the work order's status. It reports
+// whether a row matched; matched=false means another worker already advanced the
+// state (or the row vanished), so the caller skips the journal write.
+func (r *WorkOrderRepository) transition(ctx context.Context, tx workOrderTx, sql string, args ...any) (bool, error) {
+	tag, err := tx.Exec(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("generate journal entry id: %w", err)
+		return false, err
 	}
 
-	storageCID, err := r.uploadBookkeepingJournal(ctx, journalID, entry)
-	if err != nil {
-		return err
-	}
+	return tag.RowsAffected() > 0, nil
+}
 
-	_, err = tx.Exec(ctx, `
+// persistEscrowJournal writes the prepared journal entry and its ledger postings.
+// The 0G upload that produced entry.StorageCID already completed outside this tx.
+func (r *WorkOrderRepository) persistEscrowJournal(ctx context.Context, tx workOrderTx, entry domain.EscrowJournalEntry) error {
+	_, err := tx.Exec(ctx, `
 		INSERT INTO journal_entries (
 			id,
 			idempotency_key,
@@ -761,11 +610,11 @@ func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrde
 			created_at
 		) VALUES ($1, $2, $3, $4, $5, NULL, $6)
 	`,
-		journalID,
+		entry.JournalID,
 		entry.IdempotencyKey,
 		entry.WorkOrderID,
 		entry.Description,
-		storageCID,
+		entry.StorageCID,
 		entry.CreatedAt,
 	)
 	if err != nil {
@@ -778,7 +627,7 @@ func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrde
 			return err
 		}
 
-		if err := r.recordLedgerPosting(ctx, tx, accountID, journalID, posting, entry.Amount, entry.CreatedAt); err != nil {
+		if err := r.recordLedgerPosting(ctx, tx, accountID, entry.JournalID, posting, entry.Amount, entry.CreatedAt); err != nil {
 			return err
 		}
 	}
@@ -786,44 +635,7 @@ func (r *WorkOrderRepository) recordBookkeeping(ctx context.Context, tx workOrde
 	return nil
 }
 
-func (r *WorkOrderRepository) uploadBookkeepingJournal(ctx context.Context, journalID uuid.UUID, entry bookkeepingEntry) (string, error) {
-	if r.storageUploader == nil {
-		return "", fmt.Errorf("%w: escrow journal storage uploader is not configured", domain.ErrStorage)
-	}
-
-	payload := bookkeepingJournalAnchor{
-		SchemaVersion:  "1.0",
-		Kind:           "escrow_journal_entry",
-		JournalEntryID: journalID,
-		IdempotencyKey: entry.IdempotencyKey,
-		WorkOrderID:    entry.WorkOrderID,
-		Description:    entry.Description,
-		CreatedAt:      entry.CreatedAt.UTC().Format(time.RFC3339Nano),
-		Postings:       make([]bookkeepingJournalAnchorPosting, 0, len(entry.Postings)),
-	}
-	amount := entry.Amount.String()
-	for _, posting := range entry.Postings {
-		payload.Postings = append(payload.Postings, bookkeepingJournalAnchorPosting{
-			AccountName: posting.AccountName,
-			AccountType: posting.AccountType,
-			EntryType:   posting.EntryType,
-			Amount:      amount,
-			AgentID:     posting.AgentID,
-		})
-	}
-
-	uploadOutput, err := r.storageUploader.UploadJSON(ctx, payload)
-	if err != nil {
-		return "", fmt.Errorf("%w: upload escrow journal entry: %w", domain.ErrStorage, err)
-	}
-	if uploadOutput == nil || strings.TrimSpace(uploadOutput.RootHash) == "" {
-		return "", fmt.Errorf("%w: upload escrow journal entry returned empty root hash", domain.ErrStorage)
-	}
-
-	return uploadOutput.RootHash, nil
-}
-
-func (r *WorkOrderRepository) findOrCreateAccount(ctx context.Context, tx workOrderTx, posting ledgerPosting, createdAt time.Time) (uuid.UUID, error) {
+func (r *WorkOrderRepository) findOrCreateAccount(ctx context.Context, tx workOrderTx, posting domain.LedgerPosting, createdAt time.Time) (uuid.UUID, error) {
 	accountID, err := r.nextID()
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("generate account id: %w", err)
@@ -860,7 +672,7 @@ func (r *WorkOrderRepository) recordLedgerPosting(
 	tx workOrderTx,
 	accountID uuid.UUID,
 	journalID uuid.UUID,
-	posting ledgerPosting,
+	posting domain.LedgerPosting,
 	amount big.Int,
 	createdAt time.Time,
 ) error {
@@ -916,21 +728,6 @@ func (r *WorkOrderRepository) nextID() (uuid.UUID, error) {
 	return uuid.NewV7()
 }
 
-func escrowJournalKey(workOrderID uuid.UUID, action string, transactionHash string, blockNumber string, logIndex string, onchainOrderID big.Int) string {
-	eventID := strings.TrimSpace(transactionHash)
-	if eventID != "" {
-		blockNumber = strings.TrimSpace(blockNumber)
-		logIndex = strings.TrimSpace(logIndex)
-		if blockNumber != "" || logIndex != "" {
-			eventID = fmt.Sprintf("%s:%s:%s", eventID, blockNumber, logIndex)
-		}
-	} else {
-		eventID = onchainOrderID.String()
-	}
-
-	return fmt.Sprintf("work_order:%s:%s:%s", workOrderID, action, eventID)
-}
-
 func accountBalanceDelta(accountType domain.AccountType, entryType domain.LedgerEntryType, amount big.Int) big.Int {
 	delta := *new(big.Int).Set(&amount)
 	normalDebit := accountType == domain.AccountTypeAsset || accountType == domain.AccountTypeExpense
@@ -942,13 +739,17 @@ func accountBalanceDelta(accountType domain.AccountType, entryType domain.Ledger
 	return delta
 }
 
-func scanWorkOrderBookkeepingTarget(row pgx.Row) (*workOrderBookkeepingTarget, error) {
-	var target workOrderBookkeepingTarget
-	if err := row.Scan(&target.WorkOrderID, &target.PayerID, &target.PayeeID); err != nil {
-		return nil, err
+func scanBookkeepingTarget(row pgx.Row) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	var target domain.WorkOrderBookkeepingTarget
+	err := row.Scan(&target.WorkOrderID, &target.PayerID, &target.PayeeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
 	}
 
-	return &target, nil
+	return &target, true, nil
 }
 
 func scanWorkOrder(row pgx.Row) (*domain.WorkOrder, error) {

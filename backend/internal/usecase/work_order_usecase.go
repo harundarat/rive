@@ -18,6 +18,15 @@ import (
 
 const workOrderSpecVersion = "1.0"
 
+// Escrow-only double-entry account names. The escrow bookkeeping postings live
+// here (not in the repository) because they are domain logic orchestrated by the
+// usecase. Names shared with netting (Service Expense/Revenue) come from the
+// domain package so both flows post to the same account.
+const (
+	accountNameEscrowLocked  = "escrow_locked"
+	accountNameEscrowPending = "escrow_pending"
+)
+
 var hex32Pattern = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
 type WorkOrderUsecase struct {
@@ -197,91 +206,315 @@ func (uc *WorkOrderUsecase) GetByOnchainOrderID(ctx context.Context, onchainOrde
 func (uc *WorkOrderUsecase) RecordOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (bool, error) {
 	event.RecordedAt = event.RecordedAt.UTC()
 
-	updated, err := uc.workOrderRepository.RecordOrderCreated(ctx, event)
-	if err != nil {
-		if errors.Is(err, domain.ErrStorage) {
-			return false, fmt.Errorf("%w: record order created: %w", domain.ErrStorage, err)
-		}
-
-		return false, fmt.Errorf("%w: record order created: %w", domain.ErrPersistence, err)
-	}
-
-	return updated, nil
+	return uc.recordEscrowEvent(ctx, escrowEventContext{
+		op:             "record order created",
+		action:         "order_created",
+		description:    fmt.Sprintf("Escrow order created for on-chain order %s", event.OnchainOrderID.String()),
+		amount:         event.Amount,
+		onchainOrderID: event.OnchainOrderID,
+		txHash:         event.TransactionHash,
+		blockNumber:    event.BlockNumber,
+		logIndex:       event.LogIndex,
+		occurredAt:     event.RecordedAt,
+		postings: func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting {
+			return []domain.LedgerPosting{
+				{AgentID: target.PayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeCredit},
+			}
+		},
+	},
+		func(ctx context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+			return uc.workOrderRepository.ResolveOrderCreatedTarget(ctx, event)
+		},
+		func(ctx context.Context, entry domain.EscrowJournalEntry) (bool, error) {
+			return uc.workOrderRepository.ApplyOrderCreated(ctx, event, entry)
+		},
+	)
 }
 
 func (uc *WorkOrderUsecase) RollbackOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderRollback) (bool, error) {
 	event.RolledBackAt = event.RolledBackAt.UTC()
 
-	updated, err := uc.workOrderRepository.RollbackOrderCreated(ctx, event)
-	if err != nil {
-		if errors.Is(err, domain.ErrStorage) {
-			return false, fmt.Errorf("%w: rollback order created: %w", domain.ErrStorage, err)
-		}
-
-		return false, fmt.Errorf("%w: rollback order created: %w", domain.ErrPersistence, err)
-	}
-
-	return updated, nil
+	return uc.recordEscrowEvent(ctx, escrowEventContext{
+		op:             "rollback order created",
+		action:         "order_created_rollback",
+		description:    fmt.Sprintf("Escrow order created rollback for on-chain order %s", event.OnchainOrderID.String()),
+		amount:         event.Amount,
+		onchainOrderID: event.OnchainOrderID,
+		txHash:         event.TransactionHash,
+		blockNumber:    event.BlockNumber,
+		logIndex:       event.LogIndex,
+		occurredAt:     event.RolledBackAt,
+		postings: func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting {
+			return []domain.LedgerPosting{
+				{AgentID: target.PayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeCredit},
+			}
+		},
+	},
+		func(ctx context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+			return uc.workOrderRepository.ResolveOrderCreatedRollbackTarget(ctx, event)
+		},
+		func(ctx context.Context, entry domain.EscrowJournalEntry) (bool, error) {
+			return uc.workOrderRepository.ApplyOrderCreatedRollback(ctx, event, entry)
+		},
+	)
 }
 
 func (uc *WorkOrderUsecase) RecordOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate) (bool, error) {
 	event.RecordedAt = event.RecordedAt.UTC()
 
-	updated, err := uc.workOrderRepository.RecordOrderReleased(ctx, event)
-	if err != nil {
-		if errors.Is(err, domain.ErrStorage) {
-			return false, fmt.Errorf("%w: record order released: %w", domain.ErrStorage, err)
-		}
-
-		return false, fmt.Errorf("%w: record order released: %w", domain.ErrPersistence, err)
-	}
-
-	return updated, nil
+	return uc.recordEscrowEvent(ctx, escrowEventContext{
+		op:             "record order released",
+		action:         "order_released",
+		description:    fmt.Sprintf("Escrow order released for on-chain order %s", event.OnchainOrderID.String()),
+		amount:         event.Amount,
+		onchainOrderID: event.OnchainOrderID,
+		txHash:         event.TransactionHash,
+		blockNumber:    event.BlockNumber,
+		logIndex:       event.LogIndex,
+		occurredAt:     event.RecordedAt,
+		postings: func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting {
+			return []domain.LedgerPosting{
+				{AgentID: target.PayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeCredit},
+				{AgentID: target.PayerID, AccountName: domain.AccountNameServiceExpense, AccountType: domain.AccountTypeExpense, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayeeID, AccountName: domain.AccountNameServiceRevenue, AccountType: domain.AccountTypeRevenue, EntryType: domain.LedgerEntryTypeCredit},
+			}
+		},
+	},
+		func(ctx context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+			return uc.workOrderRepository.ResolveOrderReleasedTarget(ctx, event)
+		},
+		func(ctx context.Context, entry domain.EscrowJournalEntry) (bool, error) {
+			return uc.workOrderRepository.ApplyOrderReleased(ctx, event, entry)
+		},
+	)
 }
 
 func (uc *WorkOrderUsecase) RollbackOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderRollback) (bool, error) {
 	event.RolledBackAt = event.RolledBackAt.UTC()
 
-	updated, err := uc.workOrderRepository.RollbackOrderReleased(ctx, event)
-	if err != nil {
-		if errors.Is(err, domain.ErrStorage) {
-			return false, fmt.Errorf("%w: rollback order released: %w", domain.ErrStorage, err)
-		}
-
-		return false, fmt.Errorf("%w: rollback order released: %w", domain.ErrPersistence, err)
-	}
-
-	return updated, nil
+	return uc.recordEscrowEvent(ctx, escrowEventContext{
+		op:             "rollback order released",
+		action:         "order_released_rollback",
+		description:    fmt.Sprintf("Escrow order released rollback for on-chain order %s", event.OnchainOrderID.String()),
+		amount:         event.Amount,
+		onchainOrderID: event.OnchainOrderID,
+		txHash:         event.TransactionHash,
+		blockNumber:    event.BlockNumber,
+		logIndex:       event.LogIndex,
+		occurredAt:     event.RolledBackAt,
+		postings: func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting {
+			return []domain.LedgerPosting{
+				{AgentID: target.PayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeCredit},
+				{AgentID: target.PayeeID, AccountName: domain.AccountNameServiceRevenue, AccountType: domain.AccountTypeRevenue, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayerID, AccountName: domain.AccountNameServiceExpense, AccountType: domain.AccountTypeExpense, EntryType: domain.LedgerEntryTypeCredit},
+			}
+		},
+	},
+		func(ctx context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+			return uc.workOrderRepository.ResolveOrderReleasedRollbackTarget(ctx, event)
+		},
+		func(ctx context.Context, entry domain.EscrowJournalEntry) (bool, error) {
+			return uc.workOrderRepository.ApplyOrderReleasedRollback(ctx, event, entry)
+		},
+	)
 }
 
 func (uc *WorkOrderUsecase) RecordOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate) (bool, error) {
 	event.RecordedAt = event.RecordedAt.UTC()
 
-	updated, err := uc.workOrderRepository.RecordOrderRefunded(ctx, event)
-	if err != nil {
-		if errors.Is(err, domain.ErrStorage) {
-			return false, fmt.Errorf("%w: record order refunded: %w", domain.ErrStorage, err)
-		}
-
-		return false, fmt.Errorf("%w: record order refunded: %w", domain.ErrPersistence, err)
-	}
-
-	return updated, nil
+	return uc.recordEscrowEvent(ctx, escrowEventContext{
+		op:             "record order refunded",
+		action:         "order_refunded",
+		description:    fmt.Sprintf("Escrow order refunded for on-chain order %s", event.OnchainOrderID.String()),
+		amount:         event.Amount,
+		onchainOrderID: event.OnchainOrderID,
+		txHash:         event.TransactionHash,
+		blockNumber:    event.BlockNumber,
+		logIndex:       event.LogIndex,
+		occurredAt:     event.RecordedAt,
+		postings: func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting {
+			return []domain.LedgerPosting{
+				{AgentID: target.PayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeCredit},
+			}
+		},
+	},
+		func(ctx context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+			return uc.workOrderRepository.ResolveOrderRefundedTarget(ctx, event)
+		},
+		func(ctx context.Context, entry domain.EscrowJournalEntry) (bool, error) {
+			return uc.workOrderRepository.ApplyOrderRefunded(ctx, event, entry)
+		},
+	)
 }
 
 func (uc *WorkOrderUsecase) RollbackOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderRollback) (bool, error) {
 	event.RolledBackAt = event.RolledBackAt.UTC()
 
-	updated, err := uc.workOrderRepository.RollbackOrderRefunded(ctx, event)
-	if err != nil {
-		if errors.Is(err, domain.ErrStorage) {
-			return false, fmt.Errorf("%w: rollback order refunded: %w", domain.ErrStorage, err)
-		}
+	return uc.recordEscrowEvent(ctx, escrowEventContext{
+		op:             "rollback order refunded",
+		action:         "order_refunded_rollback",
+		description:    fmt.Sprintf("Escrow order refunded rollback for on-chain order %s", event.OnchainOrderID.String()),
+		amount:         event.Amount,
+		onchainOrderID: event.OnchainOrderID,
+		txHash:         event.TransactionHash,
+		blockNumber:    event.BlockNumber,
+		logIndex:       event.LogIndex,
+		occurredAt:     event.RolledBackAt,
+		postings: func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting {
+			return []domain.LedgerPosting{
+				{AgentID: target.PayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: target.PayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeCredit},
+			}
+		},
+	},
+		func(ctx context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+			return uc.workOrderRepository.ResolveOrderRefundedRollbackTarget(ctx, event)
+		},
+		func(ctx context.Context, entry domain.EscrowJournalEntry) (bool, error) {
+			return uc.workOrderRepository.ApplyOrderRefundedRollback(ctx, event, entry)
+		},
+	)
+}
 
-		return false, fmt.Errorf("%w: rollback order refunded: %w", domain.ErrPersistence, err)
+// escrowEventContext carries everything that varies between the six escrow events
+// so recordEscrowEvent can orchestrate them uniformly.
+type escrowEventContext struct {
+	op             string // human-readable operation, used in error wrapping
+	action         string // stable token embedded in the journal idempotency key
+	description    string
+	amount         big.Int
+	onchainOrderID big.Int
+	txHash         string
+	blockNumber    string
+	logIndex       string
+	occurredAt     time.Time
+	postings       func(target *domain.WorkOrderBookkeepingTarget) []domain.LedgerPosting
+}
+
+// recordEscrowEvent runs the escrow bookkeeping orchestration for one on-chain
+// event: resolve the target (read-only), upload the journal anchor to 0G with no
+// DB transaction held (M1), then persist the state transition + journal/ledger
+// atomically. A non-matching resolve is a no-op — no upload, no mutation.
+func (uc *WorkOrderUsecase) recordEscrowEvent(
+	ctx context.Context,
+	evt escrowEventContext,
+	resolve func(context.Context) (*domain.WorkOrderBookkeepingTarget, bool, error),
+	apply func(context.Context, domain.EscrowJournalEntry) (bool, error),
+) (bool, error) {
+	target, matched, err := resolve(ctx)
+	if err != nil {
+		return false, fmt.Errorf("%w: %s: %w", domain.ErrPersistence, evt.op, err)
+	}
+	if !matched {
+		return false, nil
+	}
+
+	journalID, err := uc.newID()
+	if err != nil {
+		return false, fmt.Errorf("%s: generate journal entry id: %w", evt.op, err)
+	}
+
+	entry := domain.EscrowJournalEntry{
+		JournalID:      journalID,
+		IdempotencyKey: escrowJournalKey(target.WorkOrderID, evt.action, evt.txHash, evt.blockNumber, evt.logIndex, evt.onchainOrderID),
+		WorkOrderID:    target.WorkOrderID,
+		Description:    evt.description,
+		CreatedAt:      evt.occurredAt,
+		Amount:         evt.amount,
+		Postings:       evt.postings(target),
+	}
+
+	storageCID, err := uc.uploadEscrowJournal(ctx, entry)
+	if err != nil {
+		return false, fmt.Errorf("%w: %s: %w", domain.ErrStorage, evt.op, err)
+	}
+	entry.StorageCID = storageCID
+
+	updated, err := apply(ctx, entry)
+	if err != nil {
+		return false, fmt.Errorf("%w: %s: %w", domain.ErrPersistence, evt.op, err)
 	}
 
 	return updated, nil
+}
+
+func (uc *WorkOrderUsecase) uploadEscrowJournal(ctx context.Context, entry domain.EscrowJournalEntry) (string, error) {
+	output, err := uc.zgStorage.UploadJSON(ctx, escrowJournalAnchor(entry))
+	if err != nil {
+		return "", fmt.Errorf("upload escrow journal entry: %w", err)
+	}
+	if output == nil || strings.TrimSpace(output.RootHash) == "" {
+		return "", errors.New("upload escrow journal entry returned empty root hash")
+	}
+
+	return output.RootHash, nil
+}
+
+// bookkeepingJournalAnchor is the canonical-JSON payload pinned to 0G and hashed
+// for on-chain auditability. Its schema and JSON tags are part of that commitment
+// and must not change without versioning.
+type bookkeepingJournalAnchor struct {
+	SchemaVersion  string                            `json:"schema_version"`
+	Kind           string                            `json:"kind"`
+	JournalEntryID uuid.UUID                         `json:"journal_entry_id"`
+	IdempotencyKey string                            `json:"idempotency_key"`
+	WorkOrderID    uuid.UUID                         `json:"work_order_id"`
+	Description    string                            `json:"description"`
+	CreatedAt      string                            `json:"created_at"`
+	Postings       []bookkeepingJournalAnchorPosting `json:"postings"`
+}
+
+type bookkeepingJournalAnchorPosting struct {
+	AccountName string                 `json:"account_name"`
+	AccountType domain.AccountType     `json:"account_type"`
+	EntryType   domain.LedgerEntryType `json:"entry_type"`
+	Amount      string                 `json:"amount"`
+	AgentID     uuid.UUID              `json:"agent_id"`
+}
+
+func escrowJournalAnchor(entry domain.EscrowJournalEntry) bookkeepingJournalAnchor {
+	payload := bookkeepingJournalAnchor{
+		SchemaVersion:  "1.0",
+		Kind:           "escrow_journal_entry",
+		JournalEntryID: entry.JournalID,
+		IdempotencyKey: entry.IdempotencyKey,
+		WorkOrderID:    entry.WorkOrderID,
+		Description:    entry.Description,
+		CreatedAt:      entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Postings:       make([]bookkeepingJournalAnchorPosting, 0, len(entry.Postings)),
+	}
+	amount := entry.Amount.String()
+	for _, posting := range entry.Postings {
+		payload.Postings = append(payload.Postings, bookkeepingJournalAnchorPosting{
+			AccountName: posting.AccountName,
+			AccountType: posting.AccountType,
+			EntryType:   posting.EntryType,
+			Amount:      amount,
+			AgentID:     posting.AgentID,
+		})
+	}
+
+	return payload
+}
+
+func escrowJournalKey(workOrderID uuid.UUID, action string, transactionHash string, blockNumber string, logIndex string, onchainOrderID big.Int) string {
+	eventID := strings.TrimSpace(transactionHash)
+	if eventID != "" {
+		blockNumber = strings.TrimSpace(blockNumber)
+		logIndex = strings.TrimSpace(logIndex)
+		if blockNumber != "" || logIndex != "" {
+			eventID = fmt.Sprintf("%s:%s:%s", eventID, blockNumber, logIndex)
+		}
+	} else {
+		eventID = onchainOrderID.String()
+	}
+
+	return fmt.Sprintf("work_order:%s:%s:%s", workOrderID, action, eventID)
 }
 
 func validateWorkOrderSpecRequest(request domain.WorkOrderSpecRequest) error {

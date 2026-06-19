@@ -54,46 +54,34 @@ func (s *fakeZGStorage) UploadBytes(ctx context.Context, data []byte) (*domain.Z
 }
 
 type fakeWorkOrderRepository struct {
-	byIdempotencyKey       map[string]domain.WorkOrder
-	byOnchainOrderID       map[string]domain.WorkOrder
-	findErr                error
-	findOnchainErr         error
-	findOnchainCalls       int
-	createErr              error
-	recordErr              error
-	rollbackErr            error
-	releaseErr             error
-	releaseRollbackErr     error
-	refundErr              error
-	refundRollbackErr      error
-	deliveryFindErr        error
-	submitDeliveryErr      error
-	created                *domain.WorkOrder
-	deliveryTarget         *domain.WorkOrderDeliveryTarget
-	recordInput            *domain.OrderCreatedWorkOrderUpdate
-	rollbackInput          *domain.OrderCreatedWorkOrderRollback
-	releaseInput           *domain.OrderReleasedWorkOrderUpdate
-	releaseRollbackInput   *domain.OrderReleasedWorkOrderRollback
-	refundInput            *domain.OrderRefundedWorkOrderUpdate
-	refundRollbackInput    *domain.OrderRefundedWorkOrderRollback
-	submitDeliveryInput    *domain.WorkOrderDeliveryUpdate
-	recordUpdated          bool
-	rollbackUpdated        bool
-	releaseUpdated         bool
-	releaseRollbackUpdated bool
-	refundUpdated          bool
-	refundRollbackUpdated  bool
-	submitDeliveryUpdated  bool
-	findCalls              int
-	createCalls            int
-	deliveryFindCalls      int
-	submitDeliveryCalls    int
-	recordCalls            int
-	rollbackCalls          int
-	releaseCalls           int
-	releaseRollbackCalls   int
-	refundCalls            int
-	refundRollbackCalls    int
+	byIdempotencyKey      map[string]domain.WorkOrder
+	byOnchainOrderID      map[string]domain.WorkOrder
+	findErr               error
+	findOnchainErr        error
+	findOnchainCalls      int
+	createErr             error
+	deliveryFindErr       error
+	submitDeliveryErr     error
+	created               *domain.WorkOrder
+	deliveryTarget        *domain.WorkOrderDeliveryTarget
+	submitDeliveryInput   *domain.WorkOrderDeliveryUpdate
+	submitDeliveryUpdated bool
+	findCalls             int
+	createCalls           int
+	deliveryFindCalls     int
+	submitDeliveryCalls   int
+
+	// Escrow resolve/apply orchestration (Fase 3). All six Resolve*/Apply* pairs
+	// delegate to the shared resolve()/apply() helpers, so a single set of fields
+	// drives every escrow event in tests.
+	resolveTarget  *domain.WorkOrderBookkeepingTarget
+	resolveMatched bool
+	resolveErr     error
+	resolveCalls   int
+	applyErr       error
+	applyUpdated   bool
+	applyCalls     int
+	applyEntry     *domain.EscrowJournalEntry
 }
 
 func (r *fakeWorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.WorkOrder, error) {
@@ -174,70 +162,72 @@ func (r *fakeWorkOrderRepository) SubmitDelivery(ctx context.Context, update dom
 	return r.submitDeliveryUpdated, nil
 }
 
-func (r *fakeWorkOrderRepository) RecordOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (bool, error) {
-	r.recordCalls++
-	copy := event
-	r.recordInput = &copy
-	if r.recordErr != nil {
-		return false, r.recordErr
+func (r *fakeWorkOrderRepository) resolve() (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	r.resolveCalls++
+	if r.resolveErr != nil {
+		return nil, false, r.resolveErr
 	}
 
-	return r.recordUpdated, nil
+	return r.resolveTarget, r.resolveMatched, nil
 }
 
-func (r *fakeWorkOrderRepository) RollbackOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderRollback) (bool, error) {
-	r.rollbackCalls++
-	copy := event
-	r.rollbackInput = &copy
-	if r.rollbackErr != nil {
-		return false, r.rollbackErr
+func (r *fakeWorkOrderRepository) apply(entry domain.EscrowJournalEntry) (bool, error) {
+	r.applyCalls++
+	captured := entry
+	r.applyEntry = &captured
+	if r.applyErr != nil {
+		return false, r.applyErr
 	}
 
-	return r.rollbackUpdated, nil
+	return r.applyUpdated, nil
 }
 
-func (r *fakeWorkOrderRepository) RecordOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate) (bool, error) {
-	r.releaseCalls++
-	copy := event
-	r.releaseInput = &copy
-	if r.releaseErr != nil {
-		return false, r.releaseErr
-	}
-
-	return r.releaseUpdated, nil
+func (r *fakeWorkOrderRepository) ResolveOrderCreatedTarget(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	return r.resolve()
 }
 
-func (r *fakeWorkOrderRepository) RollbackOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderRollback) (bool, error) {
-	r.releaseRollbackCalls++
-	copy := event
-	r.releaseRollbackInput = &copy
-	if r.releaseRollbackErr != nil {
-		return false, r.releaseRollbackErr
-	}
-
-	return r.releaseRollbackUpdated, nil
+func (r *fakeWorkOrderRepository) ApplyOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
+	return r.apply(entry)
 }
 
-func (r *fakeWorkOrderRepository) RecordOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate) (bool, error) {
-	r.refundCalls++
-	copy := event
-	r.refundInput = &copy
-	if r.refundErr != nil {
-		return false, r.refundErr
-	}
-
-	return r.refundUpdated, nil
+func (r *fakeWorkOrderRepository) ResolveOrderCreatedRollbackTarget(ctx context.Context, event domain.OrderCreatedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	return r.resolve()
 }
 
-func (r *fakeWorkOrderRepository) RollbackOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderRollback) (bool, error) {
-	r.refundRollbackCalls++
-	copy := event
-	r.refundRollbackInput = &copy
-	if r.refundRollbackErr != nil {
-		return false, r.refundRollbackErr
-	}
+func (r *fakeWorkOrderRepository) ApplyOrderCreatedRollback(ctx context.Context, event domain.OrderCreatedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
+	return r.apply(entry)
+}
 
-	return r.refundRollbackUpdated, nil
+func (r *fakeWorkOrderRepository) ResolveOrderReleasedTarget(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	return r.resolve()
+}
+
+func (r *fakeWorkOrderRepository) ApplyOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
+	return r.apply(entry)
+}
+
+func (r *fakeWorkOrderRepository) ResolveOrderReleasedRollbackTarget(ctx context.Context, event domain.OrderReleasedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	return r.resolve()
+}
+
+func (r *fakeWorkOrderRepository) ApplyOrderReleasedRollback(ctx context.Context, event domain.OrderReleasedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
+	return r.apply(entry)
+}
+
+func (r *fakeWorkOrderRepository) ResolveOrderRefundedTarget(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	return r.resolve()
+}
+
+func (r *fakeWorkOrderRepository) ApplyOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
+	return r.apply(entry)
+}
+
+func (r *fakeWorkOrderRepository) ResolveOrderRefundedRollbackTarget(ctx context.Context, event domain.OrderRefundedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
+	return r.resolve()
+}
+
+func (r *fakeWorkOrderRepository) ApplyOrderRefundedRollback(ctx context.Context, event domain.OrderRefundedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
+	return r.apply(entry)
 }
 
 type fakeAgentRepository struct {
@@ -472,306 +462,250 @@ func TestWorkOrderUsecaseUploadSpecReturnsPersistenceError(t *testing.T) {
 	}
 }
 
-func TestWorkOrderUsecaseRecordOrderCreated(t *testing.T) {
-	workOrders := &fakeWorkOrderRepository{recordUpdated: true}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-	recordedAt := time.Date(2026, 4, 22, 17, 30, 0, 0, time.FixedZone("WIB", 7*60*60))
+func TestWorkOrderUsecaseEscrowEventsBuildAndPersistJournal(t *testing.T) {
+	onchainOrderID := bigIntFromString("1")
+	amount := bigIntFromString("1000000")
+	occurredAt := time.Date(2026, 4, 22, 17, 30, 0, 0, time.FixedZone("WIB", 7*60*60))
+	occurredUTC := occurredAt.UTC()
+
+	tests := []struct {
+		name        string
+		run         func(*WorkOrderUsecase) (bool, error)
+		action      string
+		description string
+		postings    []domain.LedgerPosting
+	}{
+		{
+			name: "record order created",
+			run: func(uc *WorkOrderUsecase) (bool, error) {
+				return uc.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
+					SpecHash: testRootHash, Payer: "0xabc", Payee: "0xdef", Amount: amount, OnchainOrderID: onchainOrderID, TransactionHash: testTxHash, RecordedAt: occurredAt,
+				})
+			},
+			action:      "order_created",
+			description: "Escrow order created for on-chain order 1",
+			postings: []domain.LedgerPosting{
+				{AgentID: fixedPayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeCredit},
+			},
+		},
+		{
+			name: "rollback order created",
+			run: func(uc *WorkOrderUsecase) (bool, error) {
+				return uc.RollbackOrderCreated(context.Background(), domain.OrderCreatedWorkOrderRollback{
+					SpecHash: testRootHash, Payer: "0xabc", Payee: "0xdef", Amount: amount, OnchainOrderID: onchainOrderID, TransactionHash: testTxHash, RolledBackAt: occurredAt,
+				})
+			},
+			action:      "order_created_rollback",
+			description: "Escrow order created rollback for on-chain order 1",
+			postings: []domain.LedgerPosting{
+				{AgentID: fixedPayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeCredit},
+			},
+		},
+		{
+			name: "record order released",
+			run: func(uc *WorkOrderUsecase) (bool, error) {
+				return uc.RecordOrderReleased(context.Background(), domain.OrderReleasedWorkOrderUpdate{
+					Payee: "0xdef", Amount: amount, OnchainOrderID: onchainOrderID, TransactionHash: testTxHash, RecordedAt: occurredAt,
+				})
+			},
+			action:      "order_released",
+			description: "Escrow order released for on-chain order 1",
+			postings: []domain.LedgerPosting{
+				{AgentID: fixedPayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeCredit},
+				{AgentID: fixedPayerID, AccountName: domain.AccountNameServiceExpense, AccountType: domain.AccountTypeExpense, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayeeID, AccountName: domain.AccountNameServiceRevenue, AccountType: domain.AccountTypeRevenue, EntryType: domain.LedgerEntryTypeCredit},
+			},
+		},
+		{
+			name: "rollback order released",
+			run: func(uc *WorkOrderUsecase) (bool, error) {
+				return uc.RollbackOrderReleased(context.Background(), domain.OrderReleasedWorkOrderRollback{
+					Payee: "0xdef", Amount: amount, OnchainOrderID: onchainOrderID, TransactionHash: testTxHash, RolledBackAt: occurredAt,
+				})
+			},
+			action:      "order_released_rollback",
+			description: "Escrow order released rollback for on-chain order 1",
+			postings: []domain.LedgerPosting{
+				{AgentID: fixedPayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeCredit},
+				{AgentID: fixedPayeeID, AccountName: domain.AccountNameServiceRevenue, AccountType: domain.AccountTypeRevenue, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayerID, AccountName: domain.AccountNameServiceExpense, AccountType: domain.AccountTypeExpense, EntryType: domain.LedgerEntryTypeCredit},
+			},
+		},
+		{
+			name: "record order refunded",
+			run: func(uc *WorkOrderUsecase) (bool, error) {
+				return uc.RecordOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderUpdate{
+					Payer: "0xabc", Amount: amount, OnchainOrderID: onchainOrderID, TransactionHash: testTxHash, RecordedAt: occurredAt,
+				})
+			},
+			action:      "order_refunded",
+			description: "Escrow order refunded for on-chain order 1",
+			postings: []domain.LedgerPosting{
+				{AgentID: fixedPayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeCredit},
+			},
+		},
+		{
+			name: "rollback order refunded",
+			run: func(uc *WorkOrderUsecase) (bool, error) {
+				return uc.RollbackOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderRollback{
+					Payer: "0xabc", Amount: amount, OnchainOrderID: onchainOrderID, TransactionHash: testTxHash, RolledBackAt: occurredAt,
+				})
+			},
+			action:      "order_refunded_rollback",
+			description: "Escrow order refunded rollback for on-chain order 1",
+			postings: []domain.LedgerPosting{
+				{AgentID: fixedPayerID, AccountName: accountNameEscrowLocked, AccountType: domain.AccountTypeAsset, EntryType: domain.LedgerEntryTypeDebit},
+				{AgentID: fixedPayeeID, AccountName: accountNameEscrowPending, AccountType: domain.AccountTypeLiability, EntryType: domain.LedgerEntryTypeCredit},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := &fakeZGStorage{}
+			workOrders := &fakeWorkOrderRepository{
+				resolveMatched: true,
+				resolveTarget:  &domain.WorkOrderBookkeepingTarget{WorkOrderID: fixedWorkOrderID, PayerID: fixedPayerID, PayeeID: fixedPayeeID},
+				applyUpdated:   true,
+			}
+			uc := newTestWorkOrderUsecase(storage, workOrders, validAgentRepository())
+
+			updated, err := tt.run(uc)
+			if err != nil {
+				t.Fatalf("event returned error: %v", err)
+			}
+			if !updated {
+				t.Fatal("expected updated=true")
+			}
+
+			// Ordering: resolve, then exactly one upload, then apply.
+			if workOrders.resolveCalls != 1 || storage.calls != 1 || workOrders.applyCalls != 1 {
+				t.Fatalf("expected resolve=1 upload=1 apply=1, got resolve=%d upload=%d apply=%d", workOrders.resolveCalls, storage.calls, workOrders.applyCalls)
+			}
+			if workOrders.applyEntry == nil {
+				t.Fatal("expected an entry passed to apply")
+			}
+			entry := workOrders.applyEntry
+
+			// The upload's root hash must already be on the entry handed to apply,
+			// proving the 0G upload happened before (and outside) the DB write.
+			if entry.StorageCID != testRootHash {
+				t.Fatalf("expected entry storage cid %q, got %q", testRootHash, entry.StorageCID)
+			}
+			if entry.WorkOrderID != fixedWorkOrderID {
+				t.Fatalf("expected work order id %s, got %s", fixedWorkOrderID, entry.WorkOrderID)
+			}
+			if entry.Description != tt.description {
+				t.Fatalf("expected description %q, got %q", tt.description, entry.Description)
+			}
+			wantKey := escrowJournalKey(fixedWorkOrderID, tt.action, testTxHash, "", "", onchainOrderID)
+			if entry.IdempotencyKey != wantKey {
+				t.Fatalf("expected idempotency key %q, got %q", wantKey, entry.IdempotencyKey)
+			}
+			if entry.CreatedAt.Location() != time.UTC || !entry.CreatedAt.Equal(occurredUTC) {
+				t.Fatalf("expected created_at %s (UTC), got %s", occurredUTC, entry.CreatedAt)
+			}
+			if entry.Amount.String() != amount.String() {
+				t.Fatalf("expected amount %s, got %s", amount.String(), entry.Amount.String())
+			}
+			if len(entry.Postings) != len(tt.postings) {
+				t.Fatalf("expected %d postings, got %d", len(tt.postings), len(entry.Postings))
+			}
+			for i, want := range tt.postings {
+				if entry.Postings[i] != want {
+					t.Fatalf("posting %d: expected %+v, got %+v", i, want, entry.Postings[i])
+				}
+			}
+
+			// The 0G anchor payload mirrors the entry and keeps its committed schema.
+			anchor, ok := storage.data.(bookkeepingJournalAnchor)
+			if !ok {
+				t.Fatalf("expected bookkeepingJournalAnchor payload, got %T", storage.data)
+			}
+			if anchor.SchemaVersion != "1.0" || anchor.Kind != "escrow_journal_entry" {
+				t.Fatalf("unexpected anchor metadata: %+v", anchor)
+			}
+			if anchor.JournalEntryID != entry.JournalID || anchor.IdempotencyKey != entry.IdempotencyKey || anchor.WorkOrderID != fixedWorkOrderID {
+				t.Fatalf("unexpected anchor identity: %+v", anchor)
+			}
+			if anchor.CreatedAt != occurredUTC.Format(time.RFC3339Nano) {
+				t.Fatalf("expected anchor created_at %q, got %q", occurredUTC.Format(time.RFC3339Nano), anchor.CreatedAt)
+			}
+			if len(anchor.Postings) != len(tt.postings) {
+				t.Fatalf("expected %d anchor postings, got %d", len(tt.postings), len(anchor.Postings))
+			}
+			for i, want := range tt.postings {
+				got := anchor.Postings[i]
+				if got.AccountName != want.AccountName || got.AccountType != want.AccountType || got.EntryType != want.EntryType || got.AgentID != want.AgentID || got.Amount != amount.String() {
+					t.Fatalf("anchor posting %d: expected %+v, got %+v", i, want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkOrderUsecaseEscrowEventNoopSkipsUploadAndApply(t *testing.T) {
+	storage := &fakeZGStorage{}
+	workOrders := &fakeWorkOrderRepository{resolveMatched: false}
+	uc := newTestWorkOrderUsecase(storage, workOrders, validAgentRepository())
 
 	updated, err := uc.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
-		SpecHash:        testRootHash,
-		Payer:           "0xabc",
-		Payee:           "0xdef",
-		Amount:          bigIntFromString("1000000"),
-		OnchainOrderID:  bigIntFromString("1"),
-		TransactionHash: testTxHash,
-		RecordedAt:      recordedAt,
+		SpecHash: testRootHash, Payer: "0xabc", Payee: "0xdef", Amount: bigIntFromString("1000000"), OnchainOrderID: bigIntFromString("1"), TransactionHash: testTxHash, RecordedAt: fixedTime,
 	})
 	if err != nil {
 		t.Fatalf("RecordOrderCreated returned error: %v", err)
 	}
-	if !updated {
-		t.Fatal("expected updated=true")
+	if updated {
+		t.Fatal("expected updated=false for a non-matching event")
 	}
-	if workOrders.recordCalls != 1 {
-		t.Fatalf("expected 1 record call, got %d", workOrders.recordCalls)
+	if storage.calls != 0 {
+		t.Fatalf("expected no upload for a no-op event, got %d", storage.calls)
 	}
-	if workOrders.recordInput == nil {
-		t.Fatal("expected record input")
-	}
-	if workOrders.recordInput.SpecHash != testRootHash {
-		t.Fatalf("expected spec hash %q, got %q", testRootHash, workOrders.recordInput.SpecHash)
-	}
-	if workOrders.recordInput.Payer != "0xabc" {
-		t.Fatalf("expected payer 0xabc, got %q", workOrders.recordInput.Payer)
-	}
-	if workOrders.recordInput.Payee != "0xdef" {
-		t.Fatalf("expected payee 0xdef, got %q", workOrders.recordInput.Payee)
-	}
-	if workOrders.recordInput.Amount.String() != "1000000" {
-		t.Fatalf("expected amount 1000000, got %s", workOrders.recordInput.Amount.String())
-	}
-	if workOrders.recordInput.OnchainOrderID.String() != "1" {
-		t.Fatalf("expected order id 1, got %s", workOrders.recordInput.OnchainOrderID.String())
-	}
-	if workOrders.recordInput.TransactionHash != testTxHash {
-		t.Fatalf("expected tx hash %q, got %q", testTxHash, workOrders.recordInput.TransactionHash)
-	}
-	if workOrders.recordInput.RecordedAt.Location() != time.UTC {
-		t.Fatalf("expected recorded_at location UTC, got %s", workOrders.recordInput.RecordedAt.Location())
-	}
-	if !workOrders.recordInput.RecordedAt.Equal(recordedAt.UTC()) {
-		t.Fatalf("expected recorded_at %s, got %s", recordedAt.UTC(), workOrders.recordInput.RecordedAt)
+	if workOrders.applyCalls != 0 {
+		t.Fatalf("expected no apply for a no-op event, got %d", workOrders.applyCalls)
 	}
 }
 
-func TestWorkOrderUsecaseRollbackOrderCreated(t *testing.T) {
-	workOrders := &fakeWorkOrderRepository{rollbackUpdated: true}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-	rolledBackAt := time.Date(2026, 4, 22, 17, 45, 0, 0, time.FixedZone("WIB", 7*60*60))
+func TestWorkOrderUsecaseEscrowEventUploadFailureSkipsApply(t *testing.T) {
+	expectedErr := errors.New("0g unavailable")
+	storage := &fakeZGStorage{err: expectedErr}
+	workOrders := &fakeWorkOrderRepository{
+		resolveMatched: true,
+		resolveTarget:  &domain.WorkOrderBookkeepingTarget{WorkOrderID: fixedWorkOrderID, PayerID: fixedPayerID, PayeeID: fixedPayeeID},
+		applyUpdated:   true,
+	}
+	uc := newTestWorkOrderUsecase(storage, workOrders, validAgentRepository())
 
-	updated, err := uc.RollbackOrderCreated(context.Background(), domain.OrderCreatedWorkOrderRollback{
-		SpecHash:        testRootHash,
-		Payer:           "0xabc",
-		Payee:           "0xdef",
-		Amount:          bigIntFromString("1000000"),
-		OnchainOrderID:  bigIntFromString("1"),
-		TransactionHash: testTxHash,
-		RolledBackAt:    rolledBackAt,
-	})
-	if err != nil {
-		t.Fatalf("RollbackOrderCreated returned error: %v", err)
-	}
-	if !updated {
-		t.Fatal("expected updated=true")
-	}
-	if workOrders.rollbackCalls != 1 {
-		t.Fatalf("expected 1 rollback call, got %d", workOrders.rollbackCalls)
-	}
-	if workOrders.rollbackInput == nil {
-		t.Fatal("expected rollback input")
-	}
-	if workOrders.rollbackInput.SpecHash != testRootHash {
-		t.Fatalf("expected spec hash %q, got %q", testRootHash, workOrders.rollbackInput.SpecHash)
-	}
-	if workOrders.rollbackInput.Payer != "0xabc" {
-		t.Fatalf("expected payer 0xabc, got %q", workOrders.rollbackInput.Payer)
-	}
-	if workOrders.rollbackInput.Payee != "0xdef" {
-		t.Fatalf("expected payee 0xdef, got %q", workOrders.rollbackInput.Payee)
-	}
-	if workOrders.rollbackInput.Amount.String() != "1000000" {
-		t.Fatalf("expected amount 1000000, got %s", workOrders.rollbackInput.Amount.String())
-	}
-	if workOrders.rollbackInput.OnchainOrderID.String() != "1" {
-		t.Fatalf("expected order id 1, got %s", workOrders.rollbackInput.OnchainOrderID.String())
-	}
-	if workOrders.rollbackInput.TransactionHash != testTxHash {
-		t.Fatalf("expected tx hash %q, got %q", testTxHash, workOrders.rollbackInput.TransactionHash)
-	}
-	if workOrders.rollbackInput.RolledBackAt.Location() != time.UTC {
-		t.Fatalf("expected rollback time location UTC, got %s", workOrders.rollbackInput.RolledBackAt.Location())
-	}
-	if !workOrders.rollbackInput.RolledBackAt.Equal(rolledBackAt.UTC()) {
-		t.Fatalf("expected rollback time %s, got %s", rolledBackAt.UTC(), workOrders.rollbackInput.RolledBackAt)
-	}
-}
-
-func TestWorkOrderUsecaseRecordOrderReleased(t *testing.T) {
-	workOrders := &fakeWorkOrderRepository{releaseUpdated: true}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-	recordedAt := time.Date(2026, 4, 22, 17, 50, 0, 0, time.FixedZone("WIB", 7*60*60))
-
-	updated, err := uc.RecordOrderReleased(context.Background(), domain.OrderReleasedWorkOrderUpdate{
-		Payee:          "0xdef",
-		Amount:         bigIntFromString("1000000"),
-		OnchainOrderID: bigIntFromString("1"),
-		RecordedAt:     recordedAt,
-	})
-	if err != nil {
-		t.Fatalf("RecordOrderReleased returned error: %v", err)
-	}
-	if !updated {
-		t.Fatal("expected updated=true")
-	}
-	if workOrders.releaseCalls != 1 {
-		t.Fatalf("expected 1 release call, got %d", workOrders.releaseCalls)
-	}
-	if workOrders.releaseInput == nil {
-		t.Fatal("expected release input")
-	}
-	if workOrders.releaseInput.Payee != "0xdef" {
-		t.Fatalf("expected payee 0xdef, got %q", workOrders.releaseInput.Payee)
-	}
-	if workOrders.releaseInput.Amount.String() != "1000000" {
-		t.Fatalf("expected amount 1000000, got %s", workOrders.releaseInput.Amount.String())
-	}
-	if workOrders.releaseInput.OnchainOrderID.String() != "1" {
-		t.Fatalf("expected order id 1, got %s", workOrders.releaseInput.OnchainOrderID.String())
-	}
-	if workOrders.releaseInput.RecordedAt.Location() != time.UTC {
-		t.Fatalf("expected recorded_at location UTC, got %s", workOrders.releaseInput.RecordedAt.Location())
-	}
-	if !workOrders.releaseInput.RecordedAt.Equal(recordedAt.UTC()) {
-		t.Fatalf("expected recorded_at %s, got %s", recordedAt.UTC(), workOrders.releaseInput.RecordedAt)
-	}
-}
-
-func TestWorkOrderUsecaseRollbackOrderReleased(t *testing.T) {
-	workOrders := &fakeWorkOrderRepository{releaseRollbackUpdated: true}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-	rolledBackAt := time.Date(2026, 4, 22, 18, 0, 0, 0, time.FixedZone("WIB", 7*60*60))
-
-	updated, err := uc.RollbackOrderReleased(context.Background(), domain.OrderReleasedWorkOrderRollback{
-		Payee:          "0xdef",
-		Amount:         bigIntFromString("1000000"),
-		OnchainOrderID: bigIntFromString("1"),
-		RolledBackAt:   rolledBackAt,
-	})
-	if err != nil {
-		t.Fatalf("RollbackOrderReleased returned error: %v", err)
-	}
-	if !updated {
-		t.Fatal("expected updated=true")
-	}
-	if workOrders.releaseRollbackCalls != 1 {
-		t.Fatalf("expected 1 release rollback call, got %d", workOrders.releaseRollbackCalls)
-	}
-	if workOrders.releaseRollbackInput == nil {
-		t.Fatal("expected release rollback input")
-	}
-	if workOrders.releaseRollbackInput.RolledBackAt.Location() != time.UTC {
-		t.Fatalf("expected rollback time location UTC, got %s", workOrders.releaseRollbackInput.RolledBackAt.Location())
-	}
-	if !workOrders.releaseRollbackInput.RolledBackAt.Equal(rolledBackAt.UTC()) {
-		t.Fatalf("expected rollback time %s, got %s", rolledBackAt.UTC(), workOrders.releaseRollbackInput.RolledBackAt)
-	}
-}
-
-func TestWorkOrderUsecaseRecordOrderRefunded(t *testing.T) {
-	workOrders := &fakeWorkOrderRepository{refundUpdated: true}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-	recordedAt := time.Date(2026, 4, 22, 18, 10, 0, 0, time.FixedZone("WIB", 7*60*60))
-
-	updated, err := uc.RecordOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderUpdate{
-		Payer:          "0xabc",
-		Amount:         bigIntFromString("1000000"),
-		OnchainOrderID: bigIntFromString("1"),
-		RecordedAt:     recordedAt,
-	})
-	if err != nil {
-		t.Fatalf("RecordOrderRefunded returned error: %v", err)
-	}
-	if !updated {
-		t.Fatal("expected updated=true")
-	}
-	if workOrders.refundCalls != 1 {
-		t.Fatalf("expected 1 refund call, got %d", workOrders.refundCalls)
-	}
-	if workOrders.refundInput == nil {
-		t.Fatal("expected refund input")
-	}
-	if workOrders.refundInput.Payer != "0xabc" {
-		t.Fatalf("expected payer 0xabc, got %q", workOrders.refundInput.Payer)
-	}
-	if workOrders.refundInput.RecordedAt.Location() != time.UTC {
-		t.Fatalf("expected recorded_at location UTC, got %s", workOrders.refundInput.RecordedAt.Location())
-	}
-	if !workOrders.refundInput.RecordedAt.Equal(recordedAt.UTC()) {
-		t.Fatalf("expected recorded_at %s, got %s", recordedAt.UTC(), workOrders.refundInput.RecordedAt)
-	}
-}
-
-func TestWorkOrderUsecaseRollbackOrderRefunded(t *testing.T) {
-	workOrders := &fakeWorkOrderRepository{refundRollbackUpdated: true}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-	rolledBackAt := time.Date(2026, 4, 22, 18, 20, 0, 0, time.FixedZone("WIB", 7*60*60))
-
-	updated, err := uc.RollbackOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderRollback{
-		Payer:          "0xabc",
-		Amount:         bigIntFromString("1000000"),
-		OnchainOrderID: bigIntFromString("1"),
-		RolledBackAt:   rolledBackAt,
-	})
-	if err != nil {
-		t.Fatalf("RollbackOrderRefunded returned error: %v", err)
-	}
-	if !updated {
-		t.Fatal("expected updated=true")
-	}
-	if workOrders.refundRollbackCalls != 1 {
-		t.Fatalf("expected 1 refund rollback call, got %d", workOrders.refundRollbackCalls)
-	}
-	if workOrders.refundRollbackInput == nil {
-		t.Fatal("expected refund rollback input")
-	}
-	if workOrders.refundRollbackInput.RolledBackAt.Location() != time.UTC {
-		t.Fatalf("expected rollback time location UTC, got %s", workOrders.refundRollbackInput.RolledBackAt.Location())
-	}
-	if !workOrders.refundRollbackInput.RolledBackAt.Equal(rolledBackAt.UTC()) {
-		t.Fatalf("expected rollback time %s, got %s", rolledBackAt.UTC(), workOrders.refundRollbackInput.RolledBackAt)
-	}
-}
-
-func TestWorkOrderUsecaseRecordOrderCreatedReturnsPersistenceError(t *testing.T) {
-	expectedErr := errors.New("database unavailable")
-	workOrders := &fakeWorkOrderRepository{recordErr: expectedErr}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-
-	_, err := uc.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
-		SpecHash:        testRootHash,
-		Payer:           "0xabc",
-		Payee:           "0xdef",
-		Amount:          bigIntFromString("1000000"),
-		OnchainOrderID:  bigIntFromString("1"),
-		TransactionHash: testTxHash,
-		RecordedAt:      fixedTime,
+	_, err := uc.RecordOrderReleased(context.Background(), domain.OrderReleasedWorkOrderUpdate{
+		Payee: "0xdef", Amount: bigIntFromString("1000000"), OnchainOrderID: bigIntFromString("1"), RecordedAt: fixedTime,
 	})
 	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected original error, got %v", err)
-	}
-	if !errors.Is(err, domain.ErrPersistence) {
-		t.Fatalf("expected domain persistence error, got %v", err)
-	}
-}
-
-func TestWorkOrderUsecaseRecordOrderCreatedReturnsStorageError(t *testing.T) {
-	expectedErr := errors.New("upload unavailable")
-	workOrders := &fakeWorkOrderRepository{recordErr: errors.Join(domain.ErrStorage, expectedErr)}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
-
-	_, err := uc.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
-		SpecHash:        testRootHash,
-		Payer:           "0xabc",
-		Payee:           "0xdef",
-		Amount:          bigIntFromString("1000000"),
-		OnchainOrderID:  bigIntFromString("1"),
-		TransactionHash: testTxHash,
-		RecordedAt:      fixedTime,
-	})
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected original error, got %v", err)
+		t.Fatalf("expected wrapped upload error, got %v", err)
 	}
 	if !errors.Is(err, domain.ErrStorage) {
 		t.Fatalf("expected domain storage error, got %v", err)
 	}
 	if errors.Is(err, domain.ErrPersistence) {
-		t.Fatalf("expected storage error not to be classified as persistence, got %v", err)
+		t.Fatalf("upload failure must not be classified as persistence, got %v", err)
+	}
+	if workOrders.applyCalls != 0 {
+		t.Fatalf("expected apply to be skipped after upload failure, got %d", workOrders.applyCalls)
 	}
 }
 
-func TestWorkOrderUsecaseRollbackOrderCreatedReturnsPersistenceError(t *testing.T) {
+func TestWorkOrderUsecaseEscrowEventResolveErrorIsPersistence(t *testing.T) {
 	expectedErr := errors.New("database unavailable")
-	workOrders := &fakeWorkOrderRepository{rollbackErr: expectedErr}
-	uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
+	storage := &fakeZGStorage{}
+	workOrders := &fakeWorkOrderRepository{resolveErr: expectedErr}
+	uc := newTestWorkOrderUsecase(storage, workOrders, validAgentRepository())
 
-	_, err := uc.RollbackOrderCreated(context.Background(), domain.OrderCreatedWorkOrderRollback{
-		SpecHash:        testRootHash,
-		Payer:           "0xabc",
-		Payee:           "0xdef",
-		Amount:          bigIntFromString("1000000"),
-		OnchainOrderID:  bigIntFromString("1"),
-		TransactionHash: testTxHash,
-		RolledBackAt:    fixedTime,
+	_, err := uc.RecordOrderCreated(context.Background(), domain.OrderCreatedWorkOrderUpdate{
+		SpecHash: testRootHash, Payer: "0xabc", Payee: "0xdef", Amount: bigIntFromString("1000000"), OnchainOrderID: bigIntFromString("1"), TransactionHash: testTxHash, RecordedAt: fixedTime,
 	})
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected original error, got %v", err)
@@ -779,60 +713,30 @@ func TestWorkOrderUsecaseRollbackOrderCreatedReturnsPersistenceError(t *testing.
 	if !errors.Is(err, domain.ErrPersistence) {
 		t.Fatalf("expected domain persistence error, got %v", err)
 	}
+	if storage.calls != 0 || workOrders.applyCalls != 0 {
+		t.Fatalf("expected no upload/apply after resolve failure, got upload=%d apply=%d", storage.calls, workOrders.applyCalls)
+	}
 }
 
-func TestWorkOrderUsecaseReleaseAndRefundEventsReturnPersistenceError(t *testing.T) {
+func TestWorkOrderUsecaseEscrowEventApplyErrorIsPersistence(t *testing.T) {
 	expectedErr := errors.New("database unavailable")
 	tests := []struct {
-		name       string
-		workOrders *fakeWorkOrderRepository
-		run        func(*WorkOrderUsecase) (bool, error)
+		name string
+		run  func(*WorkOrderUsecase) (bool, error)
 	}{
 		{
-			name:       "record released",
-			workOrders: &fakeWorkOrderRepository{releaseErr: expectedErr},
+			name: "record released",
 			run: func(uc *WorkOrderUsecase) (bool, error) {
 				return uc.RecordOrderReleased(context.Background(), domain.OrderReleasedWorkOrderUpdate{
-					Payee:          "0xdef",
-					Amount:         bigIntFromString("1000000"),
-					OnchainOrderID: bigIntFromString("1"),
-					RecordedAt:     fixedTime,
+					Payee: "0xdef", Amount: bigIntFromString("1000000"), OnchainOrderID: bigIntFromString("1"), RecordedAt: fixedTime,
 				})
 			},
 		},
 		{
-			name:       "rollback released",
-			workOrders: &fakeWorkOrderRepository{releaseRollbackErr: expectedErr},
-			run: func(uc *WorkOrderUsecase) (bool, error) {
-				return uc.RollbackOrderReleased(context.Background(), domain.OrderReleasedWorkOrderRollback{
-					Payee:          "0xdef",
-					Amount:         bigIntFromString("1000000"),
-					OnchainOrderID: bigIntFromString("1"),
-					RolledBackAt:   fixedTime,
-				})
-			},
-		},
-		{
-			name:       "record refunded",
-			workOrders: &fakeWorkOrderRepository{refundErr: expectedErr},
-			run: func(uc *WorkOrderUsecase) (bool, error) {
-				return uc.RecordOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderUpdate{
-					Payer:          "0xabc",
-					Amount:         bigIntFromString("1000000"),
-					OnchainOrderID: bigIntFromString("1"),
-					RecordedAt:     fixedTime,
-				})
-			},
-		},
-		{
-			name:       "rollback refunded",
-			workOrders: &fakeWorkOrderRepository{refundRollbackErr: expectedErr},
+			name: "rollback refunded",
 			run: func(uc *WorkOrderUsecase) (bool, error) {
 				return uc.RollbackOrderRefunded(context.Background(), domain.OrderRefundedWorkOrderRollback{
-					Payer:          "0xabc",
-					Amount:         bigIntFromString("1000000"),
-					OnchainOrderID: bigIntFromString("1"),
-					RolledBackAt:   fixedTime,
+					Payer: "0xabc", Amount: bigIntFromString("1000000"), OnchainOrderID: bigIntFromString("1"), RolledBackAt: fixedTime,
 				})
 			},
 		},
@@ -840,7 +744,12 @@ func TestWorkOrderUsecaseReleaseAndRefundEventsReturnPersistenceError(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uc := newTestWorkOrderUsecase(&fakeZGStorage{}, tt.workOrders, validAgentRepository())
+			workOrders := &fakeWorkOrderRepository{
+				resolveMatched: true,
+				resolveTarget:  &domain.WorkOrderBookkeepingTarget{WorkOrderID: fixedWorkOrderID, PayerID: fixedPayerID, PayeeID: fixedPayeeID},
+				applyErr:       expectedErr,
+			}
+			uc := newTestWorkOrderUsecase(&fakeZGStorage{}, workOrders, validAgentRepository())
 
 			_, err := tt.run(uc)
 			if !errors.Is(err, expectedErr) {

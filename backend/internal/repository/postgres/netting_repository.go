@@ -22,6 +22,17 @@ const (
 	accountNameNettingReceivable = "Netting Receivable"
 )
 
+// ledgerPosting is one leg of a netting journal entry. Unlike escrow postings
+// (which share a single amount and live in domain.LedgerPosting), each netting
+// posting carries its own amount, so this type keeps a per-posting Amount.
+type ledgerPosting struct {
+	AgentID     uuid.UUID
+	AccountName string
+	AccountType domain.AccountType
+	EntryType   domain.LedgerEntryType
+	Amount      big.Int
+}
+
 type nettingExecutor interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -339,7 +350,7 @@ func (r *NettingRepository) recordPaymentIntentAccrual(ctx context.Context, tx n
 		Postings: []ledgerPosting{
 			{
 				AgentID:     intent.PayerID,
-				AccountName: accountNameServiceExpense,
+				AccountName: domain.AccountNameServiceExpense,
 				AccountType: domain.AccountTypeExpense,
 				EntryType:   domain.LedgerEntryTypeDebit,
 				Amount:      intent.Amount,
@@ -360,7 +371,7 @@ func (r *NettingRepository) recordPaymentIntentAccrual(ctx context.Context, tx n
 			},
 			{
 				AgentID:     intent.PayeeID,
-				AccountName: accountNameServiceRevenue,
+				AccountName: domain.AccountNameServiceRevenue,
 				AccountType: domain.AccountTypeRevenue,
 				EntryType:   domain.LedgerEntryTypeCredit,
 				Amount:      intent.Amount,
