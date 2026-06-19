@@ -23,8 +23,8 @@ export default function NettingDemo() {
     if (!node) return;
 
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setStage(99);
-      return;
+      const frame = requestAnimationFrame(() => setStage(99));
+      return () => cancelAnimationFrame(frame);
     }
 
     const timers: number[] = [];

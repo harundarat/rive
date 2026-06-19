@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  createElement,
   useEffect,
   useRef,
   useState,
@@ -35,8 +34,8 @@ export default function Reveal({
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
-      setVisible(true);
-      return;
+      const frame = requestAnimationFrame(() => setVisible(true));
+      return () => cancelAnimationFrame(frame);
     }
 
     const observer = new IntersectionObserver(
@@ -59,5 +58,10 @@ export default function Reveal({
     .filter(Boolean)
     .join(" ");
 
-  return createElement(as, { ref, className: composed }, children);
+  const Tag = as;
+  return (
+    <Tag ref={ref} className={composed}>
+      {children}
+    </Tag>
+  );
 }

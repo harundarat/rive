@@ -43,9 +43,11 @@ export default function FlowSteps() {
     if (!node) return;
 
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setRevealed(true);
-      setActiveCount(steps.length);
-      return;
+      const frame = requestAnimationFrame(() => {
+        setRevealed(true);
+        setActiveCount(steps.length);
+      });
+      return () => cancelAnimationFrame(frame);
     }
 
     const timers: number[] = [];
