@@ -30,9 +30,9 @@ Demo CLIs (end-to-end smoke flows that exercise a running API + on-chain contrac
 - `DB_*` — Postgres / CockroachDB connection. SSL is on by default (`DB_SSLMODE=verify-full` + `DB_SSLROOTCERT=./ca.pem`).
 - `ZG_EVM_RPC`, `ZG_STORAGE_INDEXER_RPC`, `ZG_PRIVATE_KEY` — 0G storage + EVM access.
 - `QUICKNODE_WEBHOOK_SECRET`, `ESCROW_CONTRACT_ADDRESS` — incoming on-chain event webhook.
-- `NETTING_SETTLEMENT_ADDRESS`, `NETTING_SETTLER_PRIVATE_KEY`, `NETTING_WINDOW_SECOND[S]` — netting batch settler. **If the address or private key is empty, `NettingGateway` runs in `disabled` mode (logs but does not submit on-chain tx).** This is intentional for local dev and tests.
+- `NETTING_SETTLEMENT_ADDRESS`, `NETTING_SETTLER_PRIVATE_KEY`, `NETTING_WINDOW_SECONDS` — netting batch settler. **If the address or private key is empty, `NettingGateway` runs in `disabled` mode (logs but does not submit on-chain tx).** This is intentional for local dev and tests.
 
-Note: code reads `NETTING_WINDOW_SECONDS` (plural) but `.env.example` ships `NETTING_WINDOW_SECOND` (singular). Config field is `WindowSeconds`. When in doubt, set both.
+Note: the netting window env var is `NETTING_WINDOW_SECONDS` (plural; config field `WindowSeconds`, default 60). `.env.example` matches this spelling.
 
 ## Architecture
 

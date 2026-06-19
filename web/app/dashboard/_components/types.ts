@@ -28,16 +28,6 @@ export interface Transaction {
   occurredAt: string;
 }
 
-export interface WorkOrder {
-  id: string;
-  state: "Released" | "Funded" | "Draft" | "Refunded";
-  counterparty: string;
-  role: string;
-  amount: string;
-  asset: string;
-  updated: string;
-}
-
 export interface AuditBatch {
   batchId: string;
   source: string;
@@ -93,5 +83,4 @@ export interface DemoAgent {
   label: string;
   status: "profitable" | "loss";
   address: string;
-  response: AgentResponse;
 }

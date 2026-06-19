@@ -13,8 +13,6 @@ func main() {
 		log.Fatalf("Error initializing application: %v", err)
 	}
 
-	_ = application
-
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: application.Router,
