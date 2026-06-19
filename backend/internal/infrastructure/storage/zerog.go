@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 
 	zgcommon "github.com/0gfoundation/0g-storage-client/common"
@@ -24,7 +25,10 @@ type ZGClient struct {
 }
 
 func NewZGStorageClient(cfg config.ZeroGStorageConfig) (*ZGClient, error) {
-	w3 := blockchain.MustNewWeb3(cfg.EVMRPC, cfg.PrivateKey)
+	w3, err := blockchain.NewWeb3(cfg.EVMRPC, cfg.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("init 0G web3 client: %w", err)
+	}
 	idx, err := indexer.NewClient(cfg.IndexerRPC, indexer.IndexerClientOption{
 		LogOption: zgcommon.LogOption{
 			LogLevel: logrus.InfoLevel,

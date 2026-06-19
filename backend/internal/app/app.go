@@ -14,11 +14,35 @@ import (
 	"github.com/harundarat/rive/backend/internal/infrastructure/storage"
 	postgresrepo "github.com/harundarat/rive/backend/internal/repository/postgres"
 	"github.com/harundarat/rive/backend/internal/usecase"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type App struct {
 	Config *config.Config
 	Router http.Handler
+
+	pgDB           *pgxpool.Pool
+	zgClient       *storage.ZGClient
+	nettingGateway *settlement.NettingGateway
+	nettingCancel  context.CancelFunc
+}
+
+// Close releases all long-lived resources held by the application. It stops the
+// background netting loop first, then closes the settlement gateway, 0G storage
+// client, and database pool. Safe to call once after Initialize succeeds.
+func (a *App) Close() {
+	if a.nettingCancel != nil {
+		a.nettingCancel()
+	}
+	if a.nettingGateway != nil {
+		a.nettingGateway.Close()
+	}
+	if a.zgClient != nil {
+		a.zgClient.Close()
+	}
+	if a.pgDB != nil {
+		a.pgDB.Close()
+	}
 }
 
 func Initialize() (*App, error) {
@@ -61,7 +85,8 @@ func Initialize() (*App, error) {
 		nettingGateway,
 		time.Duration(cfg.Netting.WindowSeconds)*time.Second,
 	)
-	nettingUsecase.Start(context.Background())
+	nettingCtx, nettingCancel := context.WithCancel(context.Background())
+	nettingUsecase.Start(nettingCtx)
 
 	// Handler Layer
 	agentHandler := deliveryhttp.NewAgentHandler(agentUsecase)
@@ -90,5 +115,12 @@ func Initialize() (*App, error) {
 
 	log.Println("Starting application...")
 
-	return &App{Config: cfg, Router: router}, nil
+	return &App{
+		Config:         cfg,
+		Router:         router,
+		pgDB:           pgDB,
+		zgClient:       zgClient,
+		nettingGateway: nettingGateway,
+		nettingCancel:  nettingCancel,
+	}, nil
 }

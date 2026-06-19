@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -61,7 +62,9 @@ func NewNettingGateway(zeroG config.ZeroGStorageConfig, netting config.NettingCo
 		return nil, fmt.Errorf("parse NETTING_SETTLER_PRIVATE_KEY: %w", err)
 	}
 
-	chainID, err := client.NetworkID(context.Background())
+	netCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	chainID, err := client.NetworkID(netCtx)
 	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("fetch chain id: %w", err)
