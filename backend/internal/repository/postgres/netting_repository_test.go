@@ -129,6 +129,46 @@ func TestNettingRepositoryClaimPendingIntentsLocksAndAssignsBatch(t *testing.T) 
 	}
 }
 
+func TestNettingRepositoryFindStuckProcessingBatches(t *testing.T) {
+	batchA := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4b01")
+	batchB := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4b02")
+	cutoff := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+
+	db := &fakeNettingTx{
+		rows: &fakePnLRows{rows: [][]any{{batchA}, {batchB}}},
+	}
+	repo := &NettingRepository{db: db}
+
+	batchIDs, err := repo.FindStuckProcessingBatches(context.Background(), cutoff)
+	if err != nil {
+		t.Fatalf("FindStuckProcessingBatches returned error: %v", err)
+	}
+
+	if len(batchIDs) != 2 || batchIDs[0] != batchA || batchIDs[1] != batchB {
+		t.Fatalf("unexpected stuck batch ids: %+v", batchIDs)
+	}
+	if len(db.operations) != 1 {
+		t.Fatalf("expected one query operation, got %d", len(db.operations))
+	}
+
+	querySQL := db.operations[0].sql
+	for _, expected := range []string{
+		"FROM netting_batches",
+		"batch_status = $1",
+		"updated_at < $2",
+	} {
+		if !strings.Contains(querySQL, expected) {
+			t.Fatalf("expected query SQL to contain %q, got %s", expected, querySQL)
+		}
+	}
+	if db.operations[0].args[0] != string(domain.BatchStatusProcessing) {
+		t.Fatalf("expected processing status arg, got %+v", db.operations[0].args[0])
+	}
+	if db.operations[0].args[1] != cutoff {
+		t.Fatalf("expected cutoff arg %v, got %+v", cutoff, db.operations[0].args[1])
+	}
+}
+
 func TestNettingRepositoryMarkBatchSettledStoresBatchHashOnly(t *testing.T) {
 	batchID := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a44")
 	settledAt := time.Date(2026, 5, 2, 10, 1, 0, 0, time.UTC)

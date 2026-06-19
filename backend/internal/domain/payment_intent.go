@@ -66,6 +66,7 @@ type NettingRepository interface {
 	ClaimPendingIntents(ctx context.Context, windowEnd time.Time, batchID uuid.UUID, claimedAt time.Time) (*NettingBatchClaim, error)
 	MarkBatchSettled(ctx context.Context, settlement NettingBatchSettlement) error
 	MarkBatchFailed(ctx context.Context, batchID uuid.UUID, reason string, failedAt time.Time) error
+	FindStuckProcessingBatches(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error)
 }
 
 type NettingSettlementGateway interface {

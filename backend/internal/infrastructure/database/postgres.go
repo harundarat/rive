@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/harundarat/rive/backend/internal/config"
@@ -22,7 +22,7 @@ func Open(cfg config.DatabaseConfig) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
 
-	log.Println("Database connected")
+	slog.Info("database connected")
 	return dbpool, nil
 }
 
@@ -49,6 +49,6 @@ func openWithInlineCACert(cfg config.DatabaseConfig) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
 
-	log.Println("Database connected")
+	slog.Info("database connected")
 	return dbpool, nil
 }

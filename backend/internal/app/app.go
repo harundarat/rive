@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -86,6 +86,10 @@ func Initialize() (*App, error) {
 		time.Duration(cfg.Netting.WindowSeconds)*time.Second,
 	)
 	nettingCtx, nettingCancel := context.WithCancel(context.Background())
+	if err := nettingUsecase.ReconcileStuckBatches(nettingCtx); err != nil {
+		// Best-effort: a reconcile failure must not block startup.
+		slog.Error("startup netting reconcile failed", "error", err)
+	}
 	nettingUsecase.Start(nettingCtx)
 
 	// Handler Layer
@@ -113,7 +117,7 @@ func Initialize() (*App, error) {
 		cfg.AllowedCORSOrigins(),
 	)
 
-	log.Println("Starting application...")
+	slog.Info("starting application")
 
 	return &App{
 		Config:         cfg,

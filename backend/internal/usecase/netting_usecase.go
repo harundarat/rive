@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"sort"
 	"strings"
@@ -18,6 +18,12 @@ import (
 const (
 	nettingAssetRUSD       = "rUSD"
 	nettingManifestVersion = "1.0"
+
+	// defaultSettleTimeout bounds the on-chain settle step so a transaction that
+	// never mines (bind.WaitMined) cannot wedge the whole netting loop.
+	defaultSettleTimeout = 90 * time.Second
+	// reconcileStuckReason labels batches the startup reconcile marks failed.
+	reconcileStuckReason = "reconciliation: batch left in processing across restart"
 )
 
 type NettingUsecase struct {
@@ -26,6 +32,8 @@ type NettingUsecase struct {
 	agentRepository   domain.AgentRepository
 	settlementGateway domain.NettingSettlementGateway
 	window            time.Duration
+	settleTimeout     time.Duration
+	reconcileGrace    time.Duration
 	now               func() time.Time
 	newID             func() (uuid.UUID, error)
 }
@@ -41,15 +49,48 @@ func NewNettingUsecase(
 		window = time.Minute
 	}
 
+	// reconcileGrace must exceed a normal flush (which includes WaitMined) so a
+	// batch claimed by a live worker is never clobbered as "stuck".
+	reconcileGrace := 2 * window
+	if reconcileGrace < time.Minute {
+		reconcileGrace = time.Minute
+	}
+
 	return &NettingUsecase{
 		zgStorage:         zgStorage,
 		nettingRepository: nettingRepository,
 		agentRepository:   agentRepository,
 		settlementGateway: settlementGateway,
 		window:            window,
+		settleTimeout:     defaultSettleTimeout,
+		reconcileGrace:    reconcileGrace,
 		now:               time.Now,
 		newID:             uuid.NewV7,
 	}
+}
+
+// ReconcileStuckBatches fails any batch still in processing past reconcileGrace —
+// an orphan from a crash between claim and settlement. It is idempotent (a failed
+// batch is no longer processing) and best-effort per batch, so one failure does
+// not abort the rest. Run once at startup before the netting loop begins.
+func (uc *NettingUsecase) ReconcileStuckBatches(ctx context.Context) error {
+	cutoff := uc.now().UTC().Add(-uc.reconcileGrace)
+	batchIDs, err := uc.nettingRepository.FindStuckProcessingBatches(ctx, cutoff)
+	if err != nil {
+		return fmt.Errorf("%w: reconcile stuck netting batches: %w", domain.ErrPersistence, err)
+	}
+
+	for _, batchID := range batchIDs {
+		if err := uc.nettingRepository.MarkBatchFailed(ctx, batchID, reconcileStuckReason, uc.now().UTC()); err != nil {
+			slog.Error("reconcile: mark stuck netting batch failed", "batch_id", batchID, "error", err)
+			continue
+		}
+	}
+	if len(batchIDs) > 0 {
+		slog.Warn("reconciled stuck netting batches", "count", len(batchIDs))
+	}
+
+	return nil
 }
 
 func (uc *NettingUsecase) SubmitIntent(ctx context.Context, request domain.PaymentIntentRequest) (*domain.PaymentIntentResponse, error) {
@@ -122,7 +163,7 @@ func (uc *NettingUsecase) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				if _, err := uc.FlushPending(ctx); err != nil {
-					log.Printf("netting flush failed: %v", err)
+					slog.Error("netting flush failed", "error", err)
 				}
 			}
 		}
@@ -164,8 +205,12 @@ func (uc *NettingUsecase) FlushPending(ctx context.Context) (*domain.NettingBatc
 		Creditors:     summary.Settlement.Creditors,
 		SkipOnchainTx: summary.Settlement.NetAmount.Sign() == 0,
 	}
-	receipt, err := uc.settlementGateway.SettleBatch(ctx, instruction)
+	settleCtx, cancel := context.WithTimeout(ctx, uc.settleTimeout)
+	receipt, err := uc.settlementGateway.SettleBatch(settleCtx, instruction)
+	cancel()
 	if err != nil {
+		// Cleanup uses the outer ctx (still live) so a settle-step timeout can
+		// still mark the batch failed and let the loop proceed.
 		_ = uc.nettingRepository.MarkBatchFailed(ctx, claim.Batch.ID, err.Error(), uc.now().UTC())
 		return nil, fmt.Errorf("%w: settle netting batch: %w", domain.ErrSettlement, err)
 	}

@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/big"
 	nethttp "net/http"
 	"strconv"
@@ -59,7 +59,9 @@ func NewQuickNodeWebhookHandler(
 		escrowContractAddress: strings.TrimSpace(escrowContractAddress),
 		workOrderEvents:       workOrderEvents,
 		now:                   time.Now,
-		logf:                  log.Printf,
+		logf: func(format string, args ...any) {
+			slog.Default().Info(fmt.Sprintf(format, args...))
+		},
 	}
 }
 

@@ -341,6 +341,38 @@ func (r *NettingRepository) MarkBatchFailed(ctx context.Context, batchID uuid.UU
 	})
 }
 
+// FindStuckProcessingBatches returns the ids of batches left in the processing
+// state past olderThan — orphans from a crash between ClaimPendingIntents and
+// MarkBatchSettled. The startup reconcile marks each one failed.
+func (r *NettingRepository) FindStuckProcessingBatches(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id
+		FROM netting_batches
+		WHERE batch_status = $1
+			AND updated_at < $2
+		ORDER BY created_at
+	`, string(domain.BatchStatusProcessing), olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("find stuck processing batches: %w", err)
+	}
+	defer rows.Close()
+
+	var batchIDs []uuid.UUID
+	for rows.Next() {
+		var batchID uuid.UUID
+		if err := rows.Scan(&batchID); err != nil {
+			return nil, fmt.Errorf("scan stuck processing batch id: %w", err)
+		}
+
+		batchIDs = append(batchIDs, batchID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stuck processing batches: %w", err)
+	}
+
+	return batchIDs, nil
+}
+
 func (r *NettingRepository) recordPaymentIntentAccrual(ctx context.Context, tx nettingTx, intent domain.PaymentIntent) error {
 	return r.recordNettingJournal(ctx, tx, nettingJournal{
 		IdempotencyKey:  fmt.Sprintf("payment_intent:%s:accrual", intent.ID),

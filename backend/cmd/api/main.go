@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,9 +28,12 @@ const (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	application, err := app.Initialize()
 	if err != nil {
-		log.Fatalf("Error initializing application: %v", err)
+		slog.Error("error initializing application", "error", err)
+		os.Exit(1)
 	}
 	defer application.Close()
 
@@ -45,7 +48,7 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Println("Server running on :8080")
+		slog.Info("server running", "addr", ":8080")
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
@@ -56,15 +59,16 @@ func main() {
 
 	select {
 	case err := <-serverErr:
-		log.Fatalf("Error starting server: %v", err)
+		slog.Error("error starting server", "error", err)
+		os.Exit(1)
 	case <-ctx.Done():
-		log.Println("shutdown signal received")
+		slog.Info("shutdown signal received")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("graceful shutdown failed: %v", err)
+		slog.Error("graceful shutdown failed", "error", err)
 	}
 	// application.Close() runs via defer after Shutdown drains in-flight requests,
 	// releasing the netting loop, settlement gateway, 0G client, and DB pool.

@@ -29,13 +29,17 @@ type fakeNettingRepository struct {
 	settled         *domain.NettingBatchSettlement
 	settleErr       error
 	failedBatchID   uuid.UUID
+	failedBatchIDs  []uuid.UUID
 	failureReason   string
+	stuckBatches    []uuid.UUID
+	stuckErr        error
 	createdIntent   *domain.PaymentIntent
 	findCalls       int
 	createCalls     int
 	claimCalls      int
 	markSettleCalls int
 	markFailedCalls int
+	stuckCalls      int
 }
 
 func (r *fakeNettingRepository) FindIntentByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.PaymentIntent, error) {
@@ -91,21 +95,36 @@ func (r *fakeNettingRepository) MarkBatchSettled(ctx context.Context, settlement
 func (r *fakeNettingRepository) MarkBatchFailed(ctx context.Context, batchID uuid.UUID, reason string, failedAt time.Time) error {
 	r.markFailedCalls++
 	r.failedBatchID = batchID
+	r.failedBatchIDs = append(r.failedBatchIDs, batchID)
 	r.failureReason = reason
 	return nil
 }
 
+func (r *fakeNettingRepository) FindStuckProcessingBatches(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error) {
+	r.stuckCalls++
+	if r.stuckErr != nil {
+		return nil, r.stuckErr
+	}
+
+	return r.stuckBatches, nil
+}
+
 type fakeNettingGateway struct {
-	instruction *domain.NettingSettlementInstruction
-	txHash      *string
-	err         error
-	calls       int
+	instruction   *domain.NettingSettlementInstruction
+	txHash        *string
+	err           error
+	blockUntilCtx bool
+	calls         int
 }
 
 func (g *fakeNettingGateway) SettleBatch(ctx context.Context, instruction domain.NettingSettlementInstruction) (*domain.NettingSettlementReceipt, error) {
 	g.calls++
 	copy := instruction
 	g.instruction = &copy
+	if g.blockUntilCtx {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if g.err != nil {
 		return nil, g.err
 	}
@@ -233,6 +252,78 @@ func TestNettingUsecaseFlushPendingUploadsAndSettles(t *testing.T) {
 	}
 	if repo.settled.BatchHash != testRootHash {
 		t.Fatalf("expected persisted batch hash %q, got %q", testRootHash, repo.settled.BatchHash)
+	}
+}
+
+func TestNettingUsecaseReconcileStuckBatchesMarksFailed(t *testing.T) {
+	stuckA := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4b01")
+	stuckB := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4b02")
+	repo := &fakeNettingRepository{stuckBatches: []uuid.UUID{stuckA, stuckB}}
+	uc := newTestNettingUsecase(repo, &fakeNettingGateway{})
+
+	if err := uc.ReconcileStuckBatches(context.Background()); err != nil {
+		t.Fatalf("ReconcileStuckBatches returned error: %v", err)
+	}
+
+	if repo.stuckCalls != 1 {
+		t.Fatalf("expected one lookup for stuck batches, got %d", repo.stuckCalls)
+	}
+	if repo.markFailedCalls != 2 {
+		t.Fatalf("expected two batches marked failed, got %d", repo.markFailedCalls)
+	}
+	if len(repo.failedBatchIDs) != 2 || repo.failedBatchIDs[0] != stuckA || repo.failedBatchIDs[1] != stuckB {
+		t.Fatalf("unexpected failed batch ids: %+v", repo.failedBatchIDs)
+	}
+	if repo.failureReason != reconcileStuckReason {
+		t.Fatalf("expected reconcile reason %q, got %q", reconcileStuckReason, repo.failureReason)
+	}
+}
+
+func TestNettingUsecaseReconcileStuckBatchesNoopWhenNone(t *testing.T) {
+	repo := &fakeNettingRepository{}
+	uc := newTestNettingUsecase(repo, &fakeNettingGateway{})
+
+	if err := uc.ReconcileStuckBatches(context.Background()); err != nil {
+		t.Fatalf("ReconcileStuckBatches returned error: %v", err)
+	}
+
+	if repo.stuckCalls != 1 {
+		t.Fatalf("expected one lookup for stuck batches, got %d", repo.stuckCalls)
+	}
+	if repo.markFailedCalls != 0 {
+		t.Fatalf("expected no batches marked failed, got %d", repo.markFailedCalls)
+	}
+}
+
+func TestNettingUsecaseFlushPendingSettleTimeoutMarksFailed(t *testing.T) {
+	repo := &fakeNettingRepository{
+		claim: &domain.NettingBatchClaim{
+			Batch: domain.NettingBatch{ID: uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4aff")},
+			Intents: []domain.PaymentIntent{
+				testIntent("018f95e4-3f8d-7b70-a4dd-2d9a833c4a41", nettingAgentAID, nettingAgentBID, nettingWalletA, nettingWalletB, 10),
+				testIntent("018f95e4-3f8d-7b70-a4dd-2d9a833c4a42", nettingAgentBID, nettingAgentAID, nettingWalletB, nettingWalletA, 4),
+			},
+		},
+	}
+	gateway := &fakeNettingGateway{blockUntilCtx: true}
+	uc := newTestNettingUsecaseWithStorage(&fakeZGStorage{}, repo, gateway)
+	uc.settleTimeout = 10 * time.Millisecond
+
+	// ClaimPendingIntents stamps the batch with the generated id (newID stub).
+	generatedBatchID := uuid.MustParse("018f95e4-3f8d-7b70-a4dd-2d9a833c4a40")
+
+	_, err := uc.FlushPending(context.Background())
+	if !errors.Is(err, domain.ErrSettlement) {
+		t.Fatalf("expected settlement error, got %v", err)
+	}
+	if gateway.calls != 1 {
+		t.Fatalf("expected settlement gateway call, got %d", gateway.calls)
+	}
+	if repo.markFailedCalls != 1 || repo.failedBatchID != generatedBatchID {
+		t.Fatalf("expected stuck batch marked failed, calls=%d id=%v", repo.markFailedCalls, repo.failedBatchID)
+	}
+	if repo.markSettleCalls != 0 {
+		t.Fatalf("expected no settled mark on timeout, got %d", repo.markSettleCalls)
 	}
 }
 
