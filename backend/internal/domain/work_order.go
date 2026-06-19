@@ -33,6 +33,8 @@ type WorkOrder struct {
 	RefundedAt     *time.Time      `json:"refunded_at"`
 	OnchainOrderID *big.Int        `json:"onchain_order_id"`
 	OrderTxHash    *string         `json:"order_tx_hash"`
+	ReleaseTxHash  *string         `json:"release_tx_hash"`
+	RefundTxHash   *string         `json:"refund_tx_hash"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }

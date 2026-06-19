@@ -533,99 +533,14 @@ func (r *NettingRepository) recordNettingJournal(ctx context.Context, tx netting
 			continue
 		}
 
-		accountID, err := r.findOrCreateAccount(ctx, tx, posting, entry.CreatedAt)
+		accountID, err := upsertAccount(ctx, tx, r.nextID, posting.AgentID, posting.AccountName, posting.AccountType, entry.CreatedAt)
 		if err != nil {
 			return err
 		}
 
-		if err := r.recordLedgerPosting(ctx, tx, accountID, journalID, posting, posting.Amount, entry.CreatedAt); err != nil {
+		if err := writeLedgerPosting(ctx, tx, r.nextID, accountID, journalID, posting.AccountType, posting.EntryType, posting.Amount, entry.CreatedAt); err != nil {
 			return err
 		}
-	}
-
-	return nil
-}
-
-func (r *NettingRepository) findOrCreateAccount(ctx context.Context, tx nettingTx, posting ledgerPosting, createdAt time.Time) (uuid.UUID, error) {
-	accountID, err := r.nextID()
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("generate account id: %w", err)
-	}
-
-	var storedID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO accounts (
-			id,
-			agent_id,
-			name,
-			type,
-			created_at
-		) VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (agent_id, name) DO UPDATE
-		SET type = EXCLUDED.type
-		RETURNING id
-	`,
-		accountID,
-		posting.AgentID,
-		posting.AccountName,
-		string(posting.AccountType),
-		createdAt,
-	).Scan(&storedID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("find or create account %s: %w", posting.AccountName, err)
-	}
-
-	return storedID, nil
-}
-
-func (r *NettingRepository) recordLedgerPosting(
-	ctx context.Context,
-	tx nettingTx,
-	accountID uuid.UUID,
-	journalID uuid.UUID,
-	posting ledgerPosting,
-	amount big.Int,
-	createdAt time.Time,
-) error {
-	ledgerID, err := r.nextID()
-	if err != nil {
-		return fmt.Errorf("generate ledger entry id: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		INSERT INTO ledger_entries (
-			id,
-			account_id,
-			journal_entry_id,
-			amount,
-			entry_type,
-			created_at
-		) VALUES ($1, $2, $3, $4::numeric, $5, $6)
-	`,
-		ledgerID,
-		accountID,
-		journalID,
-		amount.String(),
-		string(posting.EntryType),
-		createdAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert ledger entry: %w", err)
-	}
-
-	delta := accountBalanceDelta(posting.AccountType, posting.EntryType, amount)
-	_, err = tx.Exec(ctx, `
-		UPDATE accounts
-		SET
-			balance = balance + $1::numeric,
-			version = version + 1
-		WHERE id = $2
-	`,
-		delta.String(),
-		accountID,
-	)
-	if err != nil {
-		return fmt.Errorf("update account balance: %w", err)
 	}
 
 	return nil

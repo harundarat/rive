@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,43 @@ type workOrderTx interface {
 	Rollback(ctx context.Context) error
 }
 
+// workOrderColumns is the single source of truth for the work_orders projection.
+// scanWorkOrderWithExtra reads these in this exact order; workOrderColumnList
+// renders them (optionally table-qualified for joined queries) so the three
+// finders never hand-maintain the list separately.
+var workOrderColumns = []string{
+	"id",
+	"idempotency_key",
+	"creator_id",
+	"provider_id",
+	"amount::text",
+	"status",
+	"spec_hash",
+	"spec_version",
+	"spec_tx_hash",
+	"deliverable_cid",
+	"delivered_at",
+	"completed_at",
+	"refunded_at",
+	"onchain_order_id::text",
+	"order_tx_hash",
+	"release_tx_hash",
+	"refund_tx_hash",
+	"created_at",
+	"updated_at",
+}
+
+// workOrderColumnList renders the work_orders projection, prefixing each column
+// with prefix (e.g. "work_orders." to disambiguate a join).
+func workOrderColumnList(prefix string) string {
+	columns := make([]string, len(workOrderColumns))
+	for i, column := range workOrderColumns {
+		columns[i] = prefix + column
+	}
+
+	return strings.Join(columns, ", ")
+}
+
 type WorkOrderRepository struct {
 	db      workOrderDB
 	beginTx func(ctx context.Context) (workOrderTx, error)
@@ -53,24 +91,7 @@ func NewWorkOrderRepository(db *pgxpool.Pool) *WorkOrderRepository {
 
 func (r *WorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.WorkOrder, error) {
 	workOrder, err := scanWorkOrder(r.db.QueryRow(ctx, `
-		SELECT
-			id,
-			idempotency_key,
-			creator_id,
-			provider_id,
-			amount::text,
-			status,
-			spec_hash,
-			spec_version,
-			spec_tx_hash,
-			deliverable_cid,
-			delivered_at,
-			completed_at,
-			refunded_at,
-			onchain_order_id::text,
-			order_tx_hash,
-			created_at,
-			updated_at
+		SELECT `+workOrderColumnList("")+`
 		FROM work_orders
 		WHERE idempotency_key = $1
 	`, idempotencyKey))
@@ -86,24 +107,7 @@ func (r *WorkOrderRepository) FindByIdempotencyKey(ctx context.Context, idempote
 
 func (r *WorkOrderRepository) FindByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrder, error) {
 	workOrder, err := scanWorkOrder(r.db.QueryRow(ctx, `
-		SELECT
-			id,
-			idempotency_key,
-			creator_id,
-			provider_id,
-			amount::text,
-			status,
-			spec_hash,
-			spec_version,
-			spec_tx_hash,
-			deliverable_cid,
-			delivered_at,
-			completed_at,
-			refunded_at,
-			onchain_order_id::text,
-			order_tx_hash,
-			created_at,
-			updated_at
+		SELECT `+workOrderColumnList("")+`
 		FROM work_orders
 		WHERE onchain_order_id = $1::numeric
 	`, onchainOrderID.String()))
@@ -120,24 +124,7 @@ func (r *WorkOrderRepository) FindByOnchainOrderID(ctx context.Context, onchainO
 func (r *WorkOrderRepository) FindDeliveryTargetByOnchainOrderID(ctx context.Context, onchainOrderID big.Int) (*domain.WorkOrderDeliveryTarget, error) {
 	var payee string
 	workOrder, err := scanWorkOrderWithExtra(r.db.QueryRow(ctx, `
-		SELECT
-			work_orders.id,
-			work_orders.idempotency_key,
-			work_orders.creator_id,
-			work_orders.provider_id,
-			work_orders.amount::text,
-			work_orders.status,
-			work_orders.spec_hash,
-			work_orders.spec_version,
-			work_orders.spec_tx_hash,
-			work_orders.deliverable_cid,
-			work_orders.delivered_at,
-			work_orders.completed_at,
-			work_orders.refunded_at,
-			work_orders.onchain_order_id::text,
-			work_orders.order_tx_hash,
-			work_orders.created_at,
-			work_orders.updated_at,
+		SELECT `+workOrderColumnList("work_orders.")+`,
 			payee.wallet_address
 		FROM work_orders
 		INNER JOIN agents payee ON payee.id = work_orders.provider_id
@@ -171,10 +158,12 @@ func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkO
 			refunded_at,
 			onchain_order_id,
 			order_tx_hash,
+			release_tx_hash,
+			refund_tx_hash,
 			created_at,
 			updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11, $12, $13, $14::numeric, $15, $16, $17
+			$1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11, $12, $13, $14::numeric, $15, $16, $17, $18, $19
 		)
 	`,
 		workOrder.ID,
@@ -192,6 +181,8 @@ func (r *WorkOrderRepository) Create(ctx context.Context, workOrder domain.WorkO
 		timeValue(workOrder.RefundedAt),
 		bigIntValue(workOrder.OnchainOrderID),
 		stringValue(workOrder.OrderTxHash),
+		stringValue(workOrder.ReleaseTxHash),
+		stringValue(workOrder.RefundTxHash),
 		workOrder.CreatedAt,
 		workOrder.UpdatedAt,
 	)
@@ -225,533 +216,6 @@ func (r *WorkOrderRepository) SubmitDelivery(ctx context.Context, update domain.
 	return commandTag.RowsAffected() > 0, nil
 }
 
-// ResolveOrderCreatedTarget matches an OrderCreated event against a draft work order
-// and its counterparties, without mutating any row. It is read-only and holds no
-// transaction, so the journal upload it precedes never blocks a DB connection.
-func (r *WorkOrderRepository) ResolveOrderCreatedTarget(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
-		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
-		FROM work_orders
-		INNER JOIN agents payer ON payer.id = work_orders.creator_id
-		INNER JOIN agents payee ON payee.id = work_orders.provider_id
-		WHERE work_orders.spec_hash = $1
-			AND work_orders.amount = $2::numeric
-			AND work_orders.status = $3
-			AND LOWER(payer.wallet_address) = LOWER($4)
-			AND LOWER(payee.wallet_address) = LOWER($5)
-	`,
-		event.SpecHash,
-		event.Amount.String(),
-		string(domain.WorkOrderStatusDraft),
-		event.Payer,
-		event.Payee,
-	))
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve order created target: %w", err)
-	}
-
-	return target, matched, nil
-}
-
-func (r *WorkOrderRepository) ApplyOrderCreated(ctx context.Context, event domain.OrderCreatedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
-	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		matched, err := r.transition(ctx, tx, `
-			UPDATE work_orders
-			SET
-				status = $1,
-				onchain_order_id = $2::numeric,
-				order_tx_hash = $3,
-				updated_at = $4
-			WHERE id = $5
-				AND status = $6
-		`,
-			string(domain.WorkOrderStatusFunded),
-			event.OnchainOrderID.String(),
-			event.TransactionHash,
-			event.RecordedAt,
-			entry.WorkOrderID,
-			string(domain.WorkOrderStatusDraft),
-		)
-		if err != nil || !matched {
-			return false, err
-		}
-
-		return true, r.persistEscrowJournal(ctx, tx, entry)
-	})
-	if err != nil {
-		return false, fmt.Errorf("apply order created: %w", err)
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) ResolveOrderCreatedRollbackTarget(ctx context.Context, event domain.OrderCreatedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
-		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
-		FROM work_orders
-		INNER JOIN agents payer ON payer.id = work_orders.creator_id
-		INNER JOIN agents payee ON payee.id = work_orders.provider_id
-		WHERE work_orders.spec_hash = $1
-			AND work_orders.amount = $2::numeric
-			AND work_orders.onchain_order_id = $3::numeric
-			AND work_orders.order_tx_hash = $4
-			AND work_orders.status = $5
-			AND LOWER(payer.wallet_address) = LOWER($6)
-			AND LOWER(payee.wallet_address) = LOWER($7)
-	`,
-		event.SpecHash,
-		event.Amount.String(),
-		event.OnchainOrderID.String(),
-		event.TransactionHash,
-		string(domain.WorkOrderStatusFunded),
-		event.Payer,
-		event.Payee,
-	))
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve order created rollback target: %w", err)
-	}
-
-	return target, matched, nil
-}
-
-func (r *WorkOrderRepository) ApplyOrderCreatedRollback(ctx context.Context, event domain.OrderCreatedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
-	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		matched, err := r.transition(ctx, tx, `
-			UPDATE work_orders
-			SET
-				status = $1,
-				onchain_order_id = NULL,
-				order_tx_hash = NULL,
-				updated_at = $2
-			WHERE id = $3
-				AND status = $4
-		`,
-			string(domain.WorkOrderStatusDraft),
-			event.RolledBackAt,
-			entry.WorkOrderID,
-			string(domain.WorkOrderStatusFunded),
-		)
-		if err != nil || !matched {
-			return false, err
-		}
-
-		return true, r.persistEscrowJournal(ctx, tx, entry)
-	})
-	if err != nil {
-		return false, fmt.Errorf("apply order created rollback: %w", err)
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) ResolveOrderReleasedTarget(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
-		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
-		FROM work_orders
-		INNER JOIN agents payee ON payee.id = work_orders.provider_id
-		WHERE work_orders.onchain_order_id = $1::numeric
-			AND work_orders.amount = $2::numeric
-			AND work_orders.status = $3
-			AND LOWER(payee.wallet_address) = LOWER($4)
-	`,
-		event.OnchainOrderID.String(),
-		event.Amount.String(),
-		string(domain.WorkOrderStatusFunded),
-		event.Payee,
-	))
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve order released target: %w", err)
-	}
-
-	return target, matched, nil
-}
-
-func (r *WorkOrderRepository) ApplyOrderReleased(ctx context.Context, event domain.OrderReleasedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
-	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		matched, err := r.transition(ctx, tx, `
-			UPDATE work_orders
-			SET
-				status = $1,
-				completed_at = $2,
-				release_tx_hash = $3,
-				updated_at = $2
-			WHERE id = $4
-				AND status = $5
-		`,
-			string(domain.WorkOrderStatusCompleted),
-			event.RecordedAt,
-			event.TransactionHash,
-			entry.WorkOrderID,
-			string(domain.WorkOrderStatusFunded),
-		)
-		if err != nil || !matched {
-			return false, err
-		}
-
-		return true, r.persistEscrowJournal(ctx, tx, entry)
-	})
-	if err != nil {
-		return false, fmt.Errorf("apply order released: %w", err)
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) ResolveOrderReleasedRollbackTarget(ctx context.Context, event domain.OrderReleasedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
-		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
-		FROM work_orders
-		INNER JOIN agents payee ON payee.id = work_orders.provider_id
-		WHERE work_orders.onchain_order_id = $1::numeric
-			AND work_orders.amount = $2::numeric
-			AND work_orders.status = $3
-			AND LOWER(payee.wallet_address) = LOWER($4)
-	`,
-		event.OnchainOrderID.String(),
-		event.Amount.String(),
-		string(domain.WorkOrderStatusCompleted),
-		event.Payee,
-	))
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve order released rollback target: %w", err)
-	}
-
-	return target, matched, nil
-}
-
-func (r *WorkOrderRepository) ApplyOrderReleasedRollback(ctx context.Context, event domain.OrderReleasedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
-	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		matched, err := r.transition(ctx, tx, `
-			UPDATE work_orders
-			SET
-				status = $1,
-				completed_at = NULL,
-				release_tx_hash = NULL,
-				updated_at = $2
-			WHERE id = $3
-				AND status = $4
-		`,
-			string(domain.WorkOrderStatusFunded),
-			event.RolledBackAt,
-			entry.WorkOrderID,
-			string(domain.WorkOrderStatusCompleted),
-		)
-		if err != nil || !matched {
-			return false, err
-		}
-
-		return true, r.persistEscrowJournal(ctx, tx, entry)
-	})
-	if err != nil {
-		return false, fmt.Errorf("apply order released rollback: %w", err)
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) ResolveOrderRefundedTarget(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
-		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
-		FROM work_orders
-		INNER JOIN agents payer ON payer.id = work_orders.creator_id
-		WHERE work_orders.onchain_order_id = $1::numeric
-			AND work_orders.amount = $2::numeric
-			AND work_orders.status = $3
-			AND LOWER(payer.wallet_address) = LOWER($4)
-	`,
-		event.OnchainOrderID.String(),
-		event.Amount.String(),
-		string(domain.WorkOrderStatusFunded),
-		event.Payer,
-	))
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve order refunded target: %w", err)
-	}
-
-	return target, matched, nil
-}
-
-func (r *WorkOrderRepository) ApplyOrderRefunded(ctx context.Context, event domain.OrderRefundedWorkOrderUpdate, entry domain.EscrowJournalEntry) (bool, error) {
-	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		matched, err := r.transition(ctx, tx, `
-			UPDATE work_orders
-			SET
-				status = $1,
-				refunded_at = $2,
-				refund_tx_hash = $3,
-				updated_at = $2
-			WHERE id = $4
-				AND status = $5
-		`,
-			string(domain.WorkOrderStatusRefunded),
-			event.RecordedAt,
-			event.TransactionHash,
-			entry.WorkOrderID,
-			string(domain.WorkOrderStatusFunded),
-		)
-		if err != nil || !matched {
-			return false, err
-		}
-
-		return true, r.persistEscrowJournal(ctx, tx, entry)
-	})
-	if err != nil {
-		return false, fmt.Errorf("apply order refunded: %w", err)
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) ResolveOrderRefundedRollbackTarget(ctx context.Context, event domain.OrderRefundedWorkOrderRollback) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	target, matched, err := scanBookkeepingTarget(r.db.QueryRow(ctx, `
-		SELECT work_orders.id, work_orders.creator_id, work_orders.provider_id
-		FROM work_orders
-		INNER JOIN agents payer ON payer.id = work_orders.creator_id
-		WHERE work_orders.onchain_order_id = $1::numeric
-			AND work_orders.amount = $2::numeric
-			AND work_orders.status = $3
-			AND LOWER(payer.wallet_address) = LOWER($4)
-	`,
-		event.OnchainOrderID.String(),
-		event.Amount.String(),
-		string(domain.WorkOrderStatusRefunded),
-		event.Payer,
-	))
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve order refunded rollback target: %w", err)
-	}
-
-	return target, matched, nil
-}
-
-func (r *WorkOrderRepository) ApplyOrderRefundedRollback(ctx context.Context, event domain.OrderRefundedWorkOrderRollback, entry domain.EscrowJournalEntry) (bool, error) {
-	updated, err := r.withTx(ctx, func(tx workOrderTx) (bool, error) {
-		matched, err := r.transition(ctx, tx, `
-			UPDATE work_orders
-			SET
-				status = $1,
-				refunded_at = NULL,
-				refund_tx_hash = NULL,
-				updated_at = $2
-			WHERE id = $3
-				AND status = $4
-		`,
-			string(domain.WorkOrderStatusFunded),
-			event.RolledBackAt,
-			entry.WorkOrderID,
-			string(domain.WorkOrderStatusRefunded),
-		)
-		if err != nil || !matched {
-			return false, err
-		}
-
-		return true, r.persistEscrowJournal(ctx, tx, entry)
-	})
-	if err != nil {
-		return false, fmt.Errorf("apply order refunded rollback: %w", err)
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) withTx(ctx context.Context, fn func(tx workOrderTx) (bool, error)) (updated bool, err error) {
-	tx, err := r.begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-
-	updated, err = fn(tx)
-	if err != nil {
-		return false, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return false, err
-	}
-
-	return updated, nil
-}
-
-func (r *WorkOrderRepository) begin(ctx context.Context) (workOrderTx, error) {
-	if r.beginTx != nil {
-		return r.beginTx(ctx)
-	}
-
-	return nil, errors.New("transaction support is not configured")
-}
-
-// transition runs a guarded UPDATE that flips the work order's status. It reports
-// whether a row matched; matched=false means another worker already advanced the
-// state (or the row vanished), so the caller skips the journal write.
-func (r *WorkOrderRepository) transition(ctx context.Context, tx workOrderTx, sql string, args ...any) (bool, error) {
-	tag, err := tx.Exec(ctx, sql, args...)
-	if err != nil {
-		return false, err
-	}
-
-	return tag.RowsAffected() > 0, nil
-}
-
-// persistEscrowJournal writes the prepared journal entry and its ledger postings.
-// The 0G upload that produced entry.StorageCID already completed outside this tx.
-func (r *WorkOrderRepository) persistEscrowJournal(ctx context.Context, tx workOrderTx, entry domain.EscrowJournalEntry) error {
-	_, err := tx.Exec(ctx, `
-		INSERT INTO journal_entries (
-			id,
-			idempotency_key,
-			work_order_id,
-			description,
-			storage_cid,
-			netting_batch_id,
-			created_at
-		) VALUES ($1, $2, $3, $4, $5, NULL, $6)
-	`,
-		entry.JournalID,
-		entry.IdempotencyKey,
-		entry.WorkOrderID,
-		entry.Description,
-		entry.StorageCID,
-		entry.CreatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert journal entry: %w", err)
-	}
-
-	for _, posting := range entry.Postings {
-		accountID, err := r.findOrCreateAccount(ctx, tx, posting, entry.CreatedAt)
-		if err != nil {
-			return err
-		}
-
-		if err := r.recordLedgerPosting(ctx, tx, accountID, entry.JournalID, posting, entry.Amount, entry.CreatedAt); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (r *WorkOrderRepository) findOrCreateAccount(ctx context.Context, tx workOrderTx, posting domain.LedgerPosting, createdAt time.Time) (uuid.UUID, error) {
-	accountID, err := r.nextID()
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("generate account id: %w", err)
-	}
-
-	var storedID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO accounts (
-			id,
-			agent_id,
-			name,
-			type,
-			created_at
-		) VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (agent_id, name) DO UPDATE
-		SET type = EXCLUDED.type
-		RETURNING id
-	`,
-		accountID,
-		posting.AgentID,
-		posting.AccountName,
-		string(posting.AccountType),
-		createdAt,
-	).Scan(&storedID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("find or create account %s: %w", posting.AccountName, err)
-	}
-
-	return storedID, nil
-}
-
-func (r *WorkOrderRepository) recordLedgerPosting(
-	ctx context.Context,
-	tx workOrderTx,
-	accountID uuid.UUID,
-	journalID uuid.UUID,
-	posting domain.LedgerPosting,
-	amount big.Int,
-	createdAt time.Time,
-) error {
-	ledgerID, err := r.nextID()
-	if err != nil {
-		return fmt.Errorf("generate ledger entry id: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		INSERT INTO ledger_entries (
-			id,
-			account_id,
-			journal_entry_id,
-			amount,
-			entry_type,
-			created_at
-		) VALUES ($1, $2, $3, $4::numeric, $5, $6)
-	`,
-		ledgerID,
-		accountID,
-		journalID,
-		amount.String(),
-		string(posting.EntryType),
-		createdAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert ledger entry: %w", err)
-	}
-
-	delta := accountBalanceDelta(posting.AccountType, posting.EntryType, amount)
-	_, err = tx.Exec(ctx, `
-		UPDATE accounts
-		SET
-			balance = balance + $1::numeric,
-			version = version + 1
-		WHERE id = $2
-	`,
-		delta.String(),
-		accountID,
-	)
-	if err != nil {
-		return fmt.Errorf("update account balance: %w", err)
-	}
-
-	return nil
-}
-
-func (r *WorkOrderRepository) nextID() (uuid.UUID, error) {
-	if r.newID != nil {
-		return r.newID()
-	}
-
-	return uuid.NewV7()
-}
-
-func accountBalanceDelta(accountType domain.AccountType, entryType domain.LedgerEntryType, amount big.Int) big.Int {
-	delta := *new(big.Int).Set(&amount)
-	normalDebit := accountType == domain.AccountTypeAsset || accountType == domain.AccountTypeExpense
-	isDebit := entryType == domain.LedgerEntryTypeDebit
-	if normalDebit != isDebit {
-		delta.Neg(&delta)
-	}
-
-	return delta
-}
-
-func scanBookkeepingTarget(row pgx.Row) (*domain.WorkOrderBookkeepingTarget, bool, error) {
-	var target domain.WorkOrderBookkeepingTarget
-	err := row.Scan(&target.WorkOrderID, &target.PayerID, &target.PayeeID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-
-	return &target, true, nil
-}
-
 func scanWorkOrder(row pgx.Row) (*domain.WorkOrder, error) {
 	return scanWorkOrderWithExtra(row)
 }
@@ -766,6 +230,8 @@ func scanWorkOrderWithExtra(row pgx.Row, extraDest ...any) (*domain.WorkOrder, e
 	var refundedAt pgtype.Timestamptz
 	var onchainOrderIDText pgtype.Text
 	var orderTxHash pgtype.Text
+	var releaseTxHash pgtype.Text
+	var refundTxHash pgtype.Text
 
 	dest := []any{
 		&workOrder.ID,
@@ -783,6 +249,8 @@ func scanWorkOrderWithExtra(row pgx.Row, extraDest ...any) (*domain.WorkOrder, e
 		&refundedAt,
 		&onchainOrderIDText,
 		&orderTxHash,
+		&releaseTxHash,
+		&refundTxHash,
 		&workOrder.CreatedAt,
 		&workOrder.UpdatedAt,
 	}
@@ -825,6 +293,14 @@ func scanWorkOrderWithExtra(row pgx.Row, extraDest ...any) (*domain.WorkOrder, e
 	if orderTxHash.Valid {
 		value := orderTxHash.String
 		workOrder.OrderTxHash = &value
+	}
+	if releaseTxHash.Valid {
+		value := releaseTxHash.String
+		workOrder.ReleaseTxHash = &value
+	}
+	if refundTxHash.Valid {
+		value := refundTxHash.String
+		workOrder.RefundTxHash = &value
 	}
 
 	return &workOrder, nil

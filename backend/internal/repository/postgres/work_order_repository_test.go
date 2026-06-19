@@ -12,6 +12,7 @@ import (
 	"github.com/harundarat/rive/backend/internal/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var (
@@ -180,6 +181,14 @@ func (row fakeWorkOrderRow) Scan(dest ...any) error {
 		switch value := dest[i].(type) {
 		case *uuid.UUID:
 			*value = row.values[i].(uuid.UUID)
+		case *string:
+			*value = row.values[i].(string)
+		case *pgtype.Text:
+			*value = row.values[i].(pgtype.Text)
+		case *pgtype.Timestamptz:
+			*value = row.values[i].(pgtype.Timestamptz)
+		case *time.Time:
+			*value = row.values[i].(time.Time)
 		default:
 			return errors.New("unsupported scan destination")
 		}
@@ -578,6 +587,48 @@ func TestWorkOrderRepositoryApplyIsNoopWhenTransitionMatchesNoRow(t *testing.T) 
 	}
 	if db.beginCalls != 1 || db.commitCalls != 1 || db.rollbackCalls != 0 {
 		t.Fatalf("expected clean commit for no-op, got begin=%d commit=%d rollback=%d", db.beginCalls, db.commitCalls, db.rollbackCalls)
+	}
+}
+
+// release_tx_hash/refund_tx_hash are written by the release/refund transitions and
+// read by the PnL query; this guards that the work_orders projection also surfaces
+// them on domain.WorkOrder (the single-source column list + scan must stay in sync).
+func TestWorkOrderRepositoryScanSurfacesReleaseAndRefundTxHash(t *testing.T) {
+	releaseTx := "0x" + strings.Repeat("a", 64)
+	refundTx := "0x" + strings.Repeat("b", 64)
+	createdAt := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+
+	row := fakeWorkOrderRow{values: []any{
+		repositoryTestWorkOrderID,               // id
+		"work_order:idempotency",                // idempotency_key
+		repositoryTestPayerID,                   // creator_id
+		repositoryTestPayeeID,                   // provider_id
+		"1000000",                               // amount::text
+		string(domain.WorkOrderStatusCompleted), // status
+		"0xspec",                                // spec_hash
+		"1.0",                                   // spec_version
+		"0xspectx",                              // spec_tx_hash
+		pgtype.Text{},                           // deliverable_cid (NULL)
+		pgtype.Timestamptz{},                    // delivered_at (NULL)
+		pgtype.Timestamptz{},                    // completed_at (NULL)
+		pgtype.Timestamptz{},                    // refunded_at (NULL)
+		pgtype.Text{},                           // onchain_order_id::text (NULL)
+		pgtype.Text{},                           // order_tx_hash (NULL)
+		pgtype.Text{String: releaseTx, Valid: true}, // release_tx_hash
+		pgtype.Text{String: refundTx, Valid: true},  // refund_tx_hash
+		createdAt, // created_at
+		createdAt, // updated_at
+	}}
+
+	workOrder, err := scanWorkOrderWithExtra(row)
+	if err != nil {
+		t.Fatalf("scanWorkOrderWithExtra returned error: %v", err)
+	}
+	if workOrder.ReleaseTxHash == nil || *workOrder.ReleaseTxHash != releaseTx {
+		t.Fatalf("expected release_tx_hash %q, got %v", releaseTx, workOrder.ReleaseTxHash)
+	}
+	if workOrder.RefundTxHash == nil || *workOrder.RefundTxHash != refundTx {
+		t.Fatalf("expected refund_tx_hash %q, got %v", refundTx, workOrder.RefundTxHash)
 	}
 }
 
