@@ -30,7 +30,7 @@ const (
 var hex32Pattern = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
 type WorkOrderUsecase struct {
-	zgStorage           domain.ZGStorage
+	storage             domain.Storage
 	workOrderRepository domain.WorkOrderRepository
 	agentRepository     domain.AgentRepository
 	now                 func() time.Time
@@ -38,12 +38,12 @@ type WorkOrderUsecase struct {
 }
 
 func NewWorkOrderUsecase(
-	zgStorage domain.ZGStorage,
+	storage domain.Storage,
 	workOrderRepository domain.WorkOrderRepository,
 	agentRepository domain.AgentRepository,
 ) *WorkOrderUsecase {
 	return &WorkOrderUsecase{
-		zgStorage:           zgStorage,
+		storage:             storage,
 		workOrderRepository: workOrderRepository,
 		agentRepository:     agentRepository,
 		now:                 time.Now,
@@ -100,7 +100,7 @@ func (uc *WorkOrderUsecase) UploadSpec(ctx context.Context, request domain.WorkO
 		Deadline:           request.Deadline,
 	}
 
-	uploadOutput, err := uc.zgStorage.UploadJSON(ctx, spec)
+	uploadOutput, err := uc.storage.UploadJSON(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: upload work order spec: %w", domain.ErrStorage, err)
 	}
@@ -444,7 +444,7 @@ func (uc *WorkOrderUsecase) recordEscrowEvent(
 }
 
 func (uc *WorkOrderUsecase) uploadEscrowJournal(ctx context.Context, entry domain.EscrowJournalEntry) (string, error) {
-	output, err := uc.zgStorage.UploadJSON(ctx, escrowJournalAnchor(entry))
+	output, err := uc.storage.UploadJSON(ctx, escrowJournalAnchor(entry))
 	if err != nil {
 		return "", fmt.Errorf("upload escrow journal entry: %w", err)
 	}

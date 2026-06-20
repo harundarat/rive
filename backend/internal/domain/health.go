@@ -1,5 +1,5 @@
 package domain
 
 type HealthUsecase interface {
-	CheckUploadZGStorage() (*ZGUploadOutput, error)
+	CheckUploadStorage() (*StorageUploadOutput, error)
 }

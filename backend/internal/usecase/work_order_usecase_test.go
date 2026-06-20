@@ -33,24 +33,24 @@ type fakeZGStorage struct {
 	calls int
 }
 
-func (s *fakeZGStorage) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
+func (s *fakeZGStorage) UploadJSON(ctx context.Context, data any) (*domain.StorageUploadOutput, error) {
 	s.calls++
 	s.data = data
 	if s.err != nil {
 		return nil, s.err
 	}
 
-	return &domain.ZGUploadOutput{RootHash: testRootHash, TxHash: testTxHash}, nil
+	return &domain.StorageUploadOutput{RootHash: testRootHash, TxHash: testTxHash}, nil
 }
 
-func (s *fakeZGStorage) UploadBytes(ctx context.Context, data []byte) (*domain.ZGUploadOutput, error) {
+func (s *fakeZGStorage) UploadBytes(ctx context.Context, data []byte) (*domain.StorageUploadOutput, error) {
 	s.calls++
 	s.data = data
 	if s.err != nil {
 		return nil, s.err
 	}
 
-	return &domain.ZGUploadOutput{RootHash: testRootHash, TxHash: testTxHash}, nil
+	return &domain.StorageUploadOutput{RootHash: testRootHash, TxHash: testTxHash}, nil
 }
 
 type fakeWorkOrderRepository struct {

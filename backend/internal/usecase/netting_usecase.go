@@ -27,7 +27,7 @@ const (
 )
 
 type NettingUsecase struct {
-	zgStorage         domain.ZGStorage
+	storage           domain.Storage
 	nettingRepository domain.NettingRepository
 	agentRepository   domain.AgentRepository
 	settlementGateway domain.NettingSettlementGateway
@@ -39,7 +39,7 @@ type NettingUsecase struct {
 }
 
 func NewNettingUsecase(
-	zgStorage domain.ZGStorage,
+	storage domain.Storage,
 	nettingRepository domain.NettingRepository,
 	agentRepository domain.AgentRepository,
 	settlementGateway domain.NettingSettlementGateway,
@@ -57,7 +57,7 @@ func NewNettingUsecase(
 	}
 
 	return &NettingUsecase{
-		zgStorage:         zgStorage,
+		storage:           storage,
 		nettingRepository: nettingRepository,
 		agentRepository:   agentRepository,
 		settlementGateway: settlementGateway,
@@ -191,7 +191,7 @@ func (uc *NettingUsecase) FlushPending(ctx context.Context) (*domain.NettingBatc
 		return nil, err
 	}
 
-	uploadOutput, err := uc.zgStorage.UploadJSON(ctx, summary.Manifest)
+	uploadOutput, err := uc.storage.UploadJSON(ctx, summary.Manifest)
 	if err != nil {
 		_ = uc.nettingRepository.MarkBatchFailed(ctx, claim.Batch.ID, err.Error(), uc.now().UTC())
 		return nil, fmt.Errorf("%w: upload netting batch manifest: %w", domain.ErrStorage, err)

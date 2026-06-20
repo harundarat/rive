@@ -41,8 +41,8 @@ type NettingGateway struct {
 	auth     *bind.TransactOpts
 }
 
-func NewNettingGateway(zeroG config.ZeroGStorageConfig, netting config.NettingConfig) (*NettingGateway, error) {
-	if strings.TrimSpace(zeroG.EVMRPC) == "" ||
+func NewNettingGateway(netting config.NettingConfig) (*NettingGateway, error) {
+	if strings.TrimSpace(netting.EVMRPC) == "" ||
 		strings.TrimSpace(netting.SettlementAddress) == "" ||
 		strings.TrimSpace(netting.SettlerPrivateKey) == "" {
 		return &NettingGateway{disabled: true}, nil
@@ -51,7 +51,7 @@ func NewNettingGateway(zeroG config.ZeroGStorageConfig, netting config.NettingCo
 		return nil, fmt.Errorf("NETTING_SETTLEMENT_ADDRESS must be a valid Ethereum address")
 	}
 
-	client, err := ethclient.Dial(zeroG.EVMRPC)
+	client, err := ethclient.Dial(netting.EVMRPC)
 	if err != nil {
 		return nil, fmt.Errorf("connect netting settlement rpc: %w", err)
 	}

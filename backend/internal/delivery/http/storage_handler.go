@@ -15,11 +15,11 @@ import (
 )
 
 type StorageHandler struct {
-	zgStorage domain.ZGStorage
+	storage domain.Storage
 }
 
-func NewStorageHandler(zgStorage domain.ZGStorage) *StorageHandler {
-	return &StorageHandler{zgStorage: zgStorage}
+func NewStorageHandler(storage domain.Storage) *StorageHandler {
+	return &StorageHandler{storage: storage}
 }
 
 func (h *StorageHandler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +49,9 @@ func (h *StorageHandler) uploadJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output, err := h.zgStorage.UploadBytes(r.Context(), data)
+	output, err := h.storage.UploadBytes(r.Context(), data)
 	if err != nil {
-		response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_0G_STORAGE", err.Error()))
+		response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_STORAGE", err.Error()))
 		return
 	}
 
@@ -69,9 +69,9 @@ func (h *StorageHandler) uploadBytes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output, err := h.zgStorage.UploadBytes(r.Context(), data)
+	output, err := h.storage.UploadBytes(r.Context(), data)
 	if err != nil {
-		response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_0G_STORAGE", err.Error()))
+		response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_STORAGE", err.Error()))
 		return
 	}
 

@@ -27,7 +27,7 @@ func NewRouter(
 
 		r.Route("/health", func(r chi.Router) {
 			r.Get("/", healthHandler.Check)
-			r.Post("/zgstorage", healthHandler.CheckUploadZGStorage)
+			r.Post("/storage", healthHandler.CheckUploadStorage)
 		})
 
 	})

@@ -379,7 +379,7 @@ func TestQuickNodeWebhookHandlerStorageError(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if body.Error.Code != "FAILED_TO_UPLOAD_TO_0G_STORAGE" {
+	if body.Error.Code != "FAILED_TO_UPLOAD_TO_STORAGE" {
 		t.Fatalf("expected storage error code, got %q", body.Error.Code)
 	}
 }

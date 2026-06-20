@@ -27,10 +27,9 @@ Demo CLIs (end-to-end smoke flows that exercise a running API + on-chain contrac
 ## Configuration
 
 `config.Load()` loads `.env` from the **current working directory** if present, then falls back to system environment variables (each key is bound via `viper.BindEnv`). The `.env` file is optional — required keys can come from either source, which makes deployment to containerized/PaaS environments straightforward. A malformed `.env` still fails startup (fail-fast), only "file not found" is tolerated. See `.env.example` for the full set; required groups:
-- `DB_*` — Postgres / CockroachDB connection. SSL is on by default (`DB_SSLMODE=verify-full` + `DB_SSLROOTCERT=./ca.pem`).
-- `ZG_EVM_RPC`, `ZG_STORAGE_INDEXER_RPC`, `ZG_PRIVATE_KEY` — 0G storage + EVM access.
+- `DB_*` — Postgres / CockroachDB connection. SSL is on by default (`DB_SSLMODE=verify-full` + `DB_SSLROOTCERT=./ca.pem`). Storage of canonical-JSON payloads also lives here (`storage_contents` table).
 - `QUICKNODE_WEBHOOK_SECRET`, `ESCROW_CONTRACT_ADDRESS` — incoming on-chain event webhook.
-- `NETTING_SETTLEMENT_ADDRESS`, `NETTING_SETTLER_PRIVATE_KEY`, `NETTING_WINDOW_SECONDS` — netting batch settler. **If the address or private key is empty, `NettingGateway` runs in `disabled` mode (logs but does not submit on-chain tx).** This is intentional for local dev and tests.
+- `NETTING_EVM_RPC`, `NETTING_SETTLEMENT_ADDRESS`, `NETTING_SETTLER_PRIVATE_KEY`, `NETTING_WINDOW_SECONDS` — netting batch settler (EVM RPC + settlement contract). **If the RPC, address, or private key is empty, `NettingGateway` runs in `disabled` mode (logs but does not submit on-chain tx).** This is intentional for local dev and tests.
 
 Note: the netting window env var is `NETTING_WINDOW_SECONDS` (plural; config field `WindowSeconds`, default 60). `.env.example` matches this spelling.
 
@@ -40,21 +39,21 @@ Strict Clean Architecture with one-way dependency flow: `cmd → app → deliver
 
 Layers:
 - `cmd/api/main.go` — process entrypoint; calls `app.Initialize()` and starts `net/http` on `:8080`.
-- `internal/app/app.go` — composition root. Wires DB pool, 0G storage client, repositories, usecases, handlers, and the chi router. **All DI happens here** — when adding a new feature, register it in `Initialize()` and pass it down to `NewRouter`.
+- `internal/app/app.go` — composition root. Wires DB pool, Postgres-backed storage, repositories, usecases, handlers, and the chi router. **All DI happens here** — when adding a new feature, register it in `Initialize()` and pass it down to `NewRouter`.
 - `internal/delivery/http` — chi handlers + `router.go`. Responses use `pkg/response.Envelope[T]` (`{success, data, error, meta}`); errors use `pkg/apierror.APIError`. Always go through these, not raw `json.NewEncoder`.
 - `internal/usecase` — business logic. One usecase per aggregate (work order, pnl, netting, health). Long-lived background loops (e.g. `nettingUsecase.Start(ctx)`) are kicked off in `app.Initialize`.
 - `internal/domain` — entities + repository/usecase interfaces + sentinel errors (`ErrNotFound`, `ErrPersistence`, validation errors via `NewValidationError`). Never put framework types here.
 - `internal/repository/postgres` — pgx-backed implementations of the domain repository interfaces.
-- `internal/infrastructure` — connection setup: `database/postgres.go` (pgxpool), `storage/zerog.go` (0G storage client), `settlement/netting.go` (eth client + ABI-bound settler).
-- `pkg/` — small reusable utilities reachable by anyone: `apierror`, `response`, `canonicaljson` (RFC 8785 / JCS for deterministic hashing of payloads written to 0G).
+- `internal/infrastructure` — connection setup: `database/postgres.go` (pgxpool), `storage/dbstorage.go` (Postgres-backed storage client), `settlement/netting.go` (eth client + ABI-bound settler).
+- `pkg/` — small reusable utilities reachable by anyone: `apierror`, `response`, `canonicaljson` (RFC 8785 / JCS for deterministic hashing of payloads written to storage).
 
 ### Cross-cutting concerns to know about
 
 - **Idempotency**: work orders and payment intents are deduplicated by `idempotency_key`. Repositories expose `FindByIdempotencyKey`; usecases short-circuit and return the existing record on a hit. Preserve this pattern when adding write endpoints.
 - **On-chain event ingestion**: `QuickNodeWebhookHandler` (POST `/api/webhooks/quicknode/escrow-events`) verifies an HMAC-SHA256 signature against `QUICKNODE_WEBHOOK_SECRET`, filters logs by `ESCROW_CONTRACT_ADDRESS`, and decodes the three event topics (`OrderCreated`, `OrderReleased`, `OrderRefunded`) defined as constants in `quicknode_webhook_handler.go`. Each event has paired `Record*` / `Rollback*` methods on `WorkOrderOnchainEventUsecase` to handle reorgs.
-- **Netting settlement**: `NettingUsecase.Start(ctx)` runs a periodic loop (`NETTING_WINDOW_SECONDS`) that closes the open batch, computes debtor/creditor positions, writes a canonical-JSON manifest to 0G, and calls `settleBatch(bytes32, address[], uint256[], address[], uint256[])` on the settlement contract. If `NettingGateway` is disabled (missing config), the on-chain step is skipped but DB state still advances — useful for tests, dangerous in prod.
+- **Netting settlement**: `NettingUsecase.Start(ctx)` runs a periodic loop (`NETTING_WINDOW_SECONDS`) that closes the open batch, computes debtor/creditor positions, writes a canonical-JSON manifest to Postgres storage, and calls `settleBatch(bytes32, address[], uint256[], address[], uint256[])` on the settlement contract. If `NettingGateway` is disabled (missing config), the on-chain step is skipped but DB state still advances — useful for tests, dangerous in prod.
 - **Money types**: amounts are `math/big.Int` end-to-end (DB → domain → on-chain). Don't round-trip through `int64` or `float64`.
-- **Canonical JSON**: anything written to 0G or hashed for on-chain commitment goes through `pkg/canonicaljson` — do not `json.Marshal` directly for those payloads.
+- **Canonical JSON**: anything written to storage or hashed for on-chain commitment goes through `pkg/canonicaljson` — do not `json.Marshal` directly for those payloads.
 
 ## Testing notes
 

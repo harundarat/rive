@@ -19,24 +19,24 @@ type fakeStorage struct {
 	calls    int
 }
 
-func (s *fakeStorage) UploadJSON(ctx context.Context, data any) (*domain.ZGUploadOutput, error) {
+func (s *fakeStorage) UploadJSON(ctx context.Context, data any) (*domain.StorageUploadOutput, error) {
 	s.calls++
 	s.jsonData = data
 	if s.err != nil {
 		return nil, s.err
 	}
 
-	return &domain.ZGUploadOutput{TxHash: "0xtx", RootHash: "0xroot"}, nil
+	return &domain.StorageUploadOutput{TxHash: "0xtx", RootHash: "0xroot"}, nil
 }
 
-func (s *fakeStorage) UploadBytes(ctx context.Context, data []byte) (*domain.ZGUploadOutput, error) {
+func (s *fakeStorage) UploadBytes(ctx context.Context, data []byte) (*domain.StorageUploadOutput, error) {
 	s.calls++
 	s.byteData = append([]byte(nil), data...)
 	if s.err != nil {
 		return nil, s.err
 	}
 
-	return &domain.ZGUploadOutput{TxHash: "0xtx", RootHash: "0xroot"}, nil
+	return &domain.StorageUploadOutput{TxHash: "0xtx", RootHash: "0xroot"}, nil
 }
 
 func TestStorageHandlerUploadCanonicalizesJSON(t *testing.T) {
@@ -56,8 +56,8 @@ func TestStorageHandlerUploadCanonicalizesJSON(t *testing.T) {
 	}
 
 	var body struct {
-		Success bool                  `json:"success"`
-		Data    domain.ZGUploadOutput `json:"data"`
+		Success bool                       `json:"success"`
+		Data    domain.StorageUploadOutput `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
@@ -159,7 +159,7 @@ func TestStorageHandlerUploadStorageError(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if body.Error.Code != "FAILED_TO_UPLOAD_TO_0G_STORAGE" {
+	if body.Error.Code != "FAILED_TO_UPLOAD_TO_STORAGE" {
 		t.Fatalf("expected storage error code, got %q", body.Error.Code)
 	}
 }

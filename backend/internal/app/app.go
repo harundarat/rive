@@ -22,23 +22,19 @@ type App struct {
 	Router http.Handler
 
 	pgDB           *pgxpool.Pool
-	zgClient       *storage.ZGClient
 	nettingGateway *settlement.NettingGateway
 	nettingCancel  context.CancelFunc
 }
 
 // Close releases all long-lived resources held by the application. It stops the
-// background netting loop first, then closes the settlement gateway, 0G storage
-// client, and database pool. Safe to call once after Initialize succeeds.
+// background netting loop first, then closes the settlement gateway and database
+// pool. Safe to call once after Initialize succeeds.
 func (a *App) Close() {
 	if a.nettingCancel != nil {
 		a.nettingCancel()
 	}
 	if a.nettingGateway != nil {
 		a.nettingGateway.Close()
-	}
-	if a.zgClient != nil {
-		a.zgClient.Close()
 	}
 	if a.pgDB != nil {
 		a.pgDB.Close()
@@ -57,10 +53,7 @@ func Initialize() (*App, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	zgClient, err := storage.NewZGStorageClient(cfg.ZeroG)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize 0G Storage client: %w", err)
-	}
+	dbStorage := storage.NewDBStorage(pgDB)
 
 	// Repository Layer
 	agentRepository := postgresrepo.NewAgentRepository(pgDB)
@@ -68,18 +61,18 @@ func Initialize() (*App, error) {
 	pnlRepository := postgresrepo.NewPnLRepository(pgDB)
 	nettingRepository := postgresrepo.NewNettingRepository(pgDB)
 
-	nettingGateway, err := settlement.NewNettingGateway(cfg.ZeroG, cfg.Netting)
+	nettingGateway, err := settlement.NewNettingGateway(cfg.Netting)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize netting settlement gateway: %w", err)
 	}
 
 	// Usecase Layer
 	agentUsecase := usecase.NewAgentUsecase(agentRepository)
-	healthUsecase := usecase.NewHealthUsecase(zgClient)
-	workOrderUsecase := usecase.NewWorkOrderUsecase(zgClient, workOrderRepository, agentRepository)
+	healthUsecase := usecase.NewHealthUsecase(dbStorage)
+	workOrderUsecase := usecase.NewWorkOrderUsecase(dbStorage, workOrderRepository, agentRepository)
 	pnlUsecase := usecase.NewPnLUsecase(pnlRepository)
 	nettingUsecase := usecase.NewNettingUsecase(
-		zgClient,
+		dbStorage,
 		nettingRepository,
 		agentRepository,
 		nettingGateway,
@@ -97,7 +90,7 @@ func Initialize() (*App, error) {
 	healthHandler := deliveryhttp.NewHealthHandler(healthUsecase)
 	workOrderHandler := deliveryhttp.NewWorkOrderHandler(workOrderUsecase)
 	ledgerHandler := deliveryhttp.NewLedgerHandler(pnlUsecase)
-	storageHandler := deliveryhttp.NewStorageHandler(zgClient)
+	storageHandler := deliveryhttp.NewStorageHandler(dbStorage)
 	nettingHandler := deliveryhttp.NewNettingHandler(nettingUsecase)
 	quickNodeWebhookHandler := deliveryhttp.NewQuickNodeWebhookHandler(
 		cfg.QuickNodeWebhookSecret,
@@ -123,7 +116,6 @@ func Initialize() (*App, error) {
 		Config:         cfg,
 		Router:         router,
 		pgDB:           pgDB,
-		zgClient:       zgClient,
 		nettingGateway: nettingGateway,
 		nettingCancel:  nettingCancel,
 	}, nil

@@ -44,7 +44,7 @@ func (h *WorkOrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, domain.ErrStorage) {
-			response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_0G_STORAGE", err.Error()))
+			response.Error(w, apierror.New(http.StatusInternalServerError, "FAILED_TO_UPLOAD_TO_STORAGE", err.Error()))
 			return
 		}
 

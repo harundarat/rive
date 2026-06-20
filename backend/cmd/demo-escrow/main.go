@@ -126,7 +126,7 @@ func run(ctx context.Context, configPath string) error {
 
 	fmt.Println()
 	printSectionHeader(3, 4, "Delivery")
-	fmt.Println("Uploading delivery payload to 0G Storage...")
+	fmt.Println("Uploading delivery payload to storage...")
 	deliveryPayload := cfg.deliveryPayload(onchainOrderID)
 	upload, err := api.uploadDelivery(ctx, deliveryPayload)
 	if err != nil {

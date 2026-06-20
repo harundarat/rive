@@ -7,18 +7,18 @@ import (
 )
 
 type HealthUsecase struct {
-	zgStorage domain.ZGStorage
+	storage domain.Storage
 }
 
-func NewHealthUsecase(zgStorage domain.ZGStorage) *HealthUsecase {
-	return &HealthUsecase{zgStorage: zgStorage}
+func NewHealthUsecase(storage domain.Storage) *HealthUsecase {
+	return &HealthUsecase{storage: storage}
 }
 
-func (uc *HealthUsecase) CheckUploadZGStorage() (*domain.ZGUploadOutput, error) {
+func (uc *HealthUsecase) CheckUploadStorage() (*domain.StorageUploadOutput, error) {
 	data := map[string]any{
 		"success": true,
 	}
-	fileHashes, err := uc.zgStorage.UploadJSON(context.Background(), data)
+	fileHashes, err := uc.storage.UploadJSON(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}

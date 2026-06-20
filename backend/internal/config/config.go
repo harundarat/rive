@@ -56,25 +56,19 @@ func (d *DatabaseConfig) buildURL(scheme string) string {
 	return u.String()
 }
 
-type ZeroGStorageConfig struct {
-	EVMRPC     string `mapstructure:"ZG_EVM_RPC"`
-	IndexerRPC string `mapstructure:"ZG_STORAGE_INDEXER_RPC"`
-	PrivateKey string `mapstructure:"ZG_PRIVATE_KEY"`
-}
-
 type NettingConfig struct {
+	EVMRPC            string `mapstructure:"NETTING_EVM_RPC"`
 	SettlementAddress string `mapstructure:"NETTING_SETTLEMENT_ADDRESS"`
 	SettlerPrivateKey string `mapstructure:"NETTING_SETTLER_PRIVATE_KEY"`
 	WindowSeconds     int    `mapstructure:"NETTING_WINDOW_SECONDS"`
 }
 
 type Config struct {
-	Database               DatabaseConfig     `mapstructure:",squash"`
-	ZeroG                  ZeroGStorageConfig `mapstructure:",squash"`
-	Netting                NettingConfig      `mapstructure:",squash"`
-	QuickNodeWebhookSecret string             `mapstructure:"QUICKNODE_WEBHOOK_SECRET"`
-	EscrowContractAddress  string             `mapstructure:"ESCROW_CONTRACT_ADDRESS"`
-	CORSAllowedOrigins     string             `mapstructure:"CORS_ALLOWED_ORIGINS"`
+	Database               DatabaseConfig `mapstructure:",squash"`
+	Netting                NettingConfig  `mapstructure:",squash"`
+	QuickNodeWebhookSecret string         `mapstructure:"QUICKNODE_WEBHOOK_SECRET"`
+	EscrowContractAddress  string         `mapstructure:"ESCROW_CONTRACT_ADDRESS"`
+	CORSAllowedOrigins     string         `mapstructure:"CORS_ALLOWED_ORIGINS"`
 }
 
 func (c *Config) AllowedCORSOrigins() []string {
